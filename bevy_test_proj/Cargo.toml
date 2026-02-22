@@ -1,0 +1,29 @@
+[package]
+name = "bevy_test_proj"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "test-bevy"
+path = "src/main.rs"
+
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+[dependencies]
+anyhow = "1.0.100"
+ash = "0.38.0"
+bevy = { version = "0.18", features = ["debug"] }
+egui = "0.33.3"
+gpu-allocator = "0.28.0"
+raw-window-handle = "0.6.2"
+shader_macros = { path = "../shader_macros"}
+
+[build-dependencies]
+bindgen = "0.72.1"
+cc = "1.2.53"
+regex = "1.12.2"
