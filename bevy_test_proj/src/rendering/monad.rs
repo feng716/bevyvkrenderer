@@ -57,7 +57,13 @@ impl<'a, F: Functor<'a> + 'a, A: 'a> Functor<'a> for Free<'a, F, A> {
     where
         F1: 'a + Fn(&Self::Unwrapped) -> B,
     {
-        struct Y { }
+        match self {
+            Free::Pure(a) => Free::Pure(f(a)),
+            Free::Free(fa) => {
+                let mapped = (*fa).fmap(|x| x.fmap(&f));
+                Free::Free(Box::new(F::cast(mapped)))
+            }
+        }
     }
 
     fn fmap_consume<B, F1>(self, f: F1) -> Self::Wrapped<B>
@@ -146,5 +152,5 @@ fn read_int_from_input() {}
 #[test]
 fn test_dsl() {}
 
-#[test]
-fn test_option() {}
+fn test_<'a, F : Functor<'a> + 'a, A : 'a>() {
+}
