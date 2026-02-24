@@ -1,3 +1,5 @@
+use bevy::ecs::world::Ref;
+
 trait Identity<T>: Sized {
     fn from_same(this: T) -> Self;
     fn into_same(self) -> T;
@@ -19,6 +21,7 @@ trait Functor: Identity<Self::Wrapped<Self::Unwrapped>> {
         mapped: <<Self as Functor>::Wrapped<X> as Functor>::Wrapped<Y>,
     ) -> Self::Wrapped<Y>;
 }
+
 trait Applicative: Functor {
     fn pure(v: Self::Unwrapped) -> Self::Wrapped<Self::Unwrapped>;
     fn ap<B, F>(&self, f: &Self::Wrapped<&F>) -> Self::Wrapped<B>
@@ -180,33 +183,67 @@ fn lift_f<F: Functor, A : Clone, M : MonadFree<Base = F, Unwrapped = A>>(v : F::
     M::wrap(F::cast(v.fmap_consume(|a|M::pure(a))))
 }
 
-enum TestDsl<T> 
+enum TestDsl<'a, T> 
 {
-    ReadInt(Box<dyn Fn(i32) -> T>),
+    ReadInt(Box<dyn Fn(i32) -> T + 'a>),
     PrintInt(i32, T)
 }
-impl<T> Functor for TestDsl<T>{
+trait RefFunctor<'a> : Identity<Self::Wrapped<'a, Self::Unwrapped>> 
+{
+    type Unwrapped: 'a;
+    type Wrapped<'c, T>: RefFunctor<'c, Unwrapped = T>
+        where 'a : 'c,
+              T : 'a;
+    fn fmap<'c, B, F>(&'a self, f: F) -> Self::Wrapped<'c, B>
+    where
+        'a : 'c,
+        F: 'c + Fn(&Self::Unwrapped) -> B;
+    fn fmap_consume<'c, B, F>(self, f: F) -> Self::Wrapped<'c, B>
+    where
+        F: 'c + Fn(Self::Unwrapped) -> B;
+    fn cast<'c, X, Y>(
+        mapped: <Self::Wrapped<'c, X> as RefFunctor<'c>>::Wrapped<'c, Y>,
+    ) -> Self::Wrapped<'c, Y>;
+}
+impl<'b, T> RefFunctor<'b> for TestDsl<'b, T>
+    where T : 'b
+{
     type Unwrapped = T;
 
-    type Wrapped<T1> = TestDsl<T1>;
+    type Wrapped<'c, T1> = TestDsl<'c, T1>
+        where 'b : 'c,
+              T1 : 'b;
 
-    fn fmap<B, F>(&self, f: F) -> Self::Wrapped<B>
+    fn fmap<'c, B : 'b, F>(&'b self, f: F) -> Self::Wrapped<'c, B>
     where
-        F: Fn(&Self::Unwrapped) -> B {
-        todo!()
+        'b : 'c,
+        F: 'c + Fn(&Self::Unwrapped) -> B {
+            match self {
+                TestDsl::ReadInt(n_f) => TestDsl::ReadInt(Box::new(move |x| f(&n_f(x)))),
+                TestDsl::PrintInt(n, t) => TestDsl::PrintInt(*n, f(t)),
+            }
     }
-
-    fn fmap_consume<B, F>(self, f: F) -> Self::Wrapped<B>
+    
+    fn fmap_consume<'c, B : 'b, F>(self, f: F) -> Self::Wrapped<'c, B>
     where
-        F: FnMut(Self::Unwrapped) -> B {
-        todo!()
+        'b : 'c,
+        F: 'c + Fn(Self::Unwrapped) -> B {
+            match self {
+                TestDsl::ReadInt(n_f) => TestDsl::ReadInt(Box::new(move |x| f(n_f(x)))),
+                TestDsl::PrintInt(n, t) => TestDsl::PrintInt(n, f(t)),
+            }
     }
+    
+    fn cast<'c, X : 'b, Y : 'b>(
+        mapped: <Self::Wrapped<'c, X> as RefFunctor<'c>>::Wrapped<'c, Y>,
+    ) -> Self::Wrapped<'c, Y> 
+        where 'b : 'c {
+        mapped 
+    }
+    
+}
+fn read_int_from_input(){
 
-    fn cast<X, Y>(
-        mapped: <<Self as Functor>::Wrapped<X> as Functor>::Wrapped<Y>,
-    ) -> Self::Wrapped<Y> {
-        todo!()
-    }
 }
 
 #[test]
