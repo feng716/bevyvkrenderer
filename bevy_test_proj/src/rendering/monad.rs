@@ -5,8 +5,12 @@ trait Identity<T>: Sized {
     fn into_same(self) -> T;
 }
 impl<T: Sized> Identity<T> for T {
-    fn from_same(this: T) -> Self { this }
-    fn into_same(self) -> T { self }
+    fn from_same(this: T) -> Self {
+        this
+    }
+    fn into_same(self) -> T {
+        self
+    }
 }
 trait Functor: Identity<Self::Wrapped<Self::Unwrapped>> {
     type Unwrapped;
@@ -36,9 +40,7 @@ trait Monad: Applicative {
 trait MonadFree: Monad {
     type Base: Functor;
 
-    fn wrap<A>(
-        fma: <Self::Base as Functor>::Wrapped<Self::Wrapped<A>>,
-    ) -> Self::Wrapped<A>;
+    fn wrap<A>(fma: <Self::Base as Functor>::Wrapped<Self::Wrapped<A>>) -> Self::Wrapped<A>;
 }
 
 impl<A> Functor for Option<A> {
@@ -59,11 +61,12 @@ impl<A> Functor for Option<A> {
     ) -> Self::Wrapped<Y> {
         mapped
     }
-    
+
     fn fmap_consume<B, F>(self, f: F) -> Option<B>
     where
-        F: FnMut(A) -> B {
-            self.map(f)
+        F: FnMut(A) -> B,
+    {
+        self.map(f)
     }
 }
 impl<A> Applicative for Option<A> {
@@ -103,36 +106,67 @@ macro_rules! mdo {
     ($e:expr) => { $e };
 }
 
-enum Free<'a, F: RefFunctor<'a> + 'a, A : 'a> 
-{
+enum Free<'a, F: RefFunctor<'a> + 'a, A: 'a> {
     Pure(A),
     Free(Box<F::Wrapped<'a, Free<'a, F, A>>>),
 }
-impl<'a, F : RefFunctor<'a, Unwrapped = A, Wrapped<'a, A> = F> + 'a, A : 'a> RefFunctor<'a> for Free<'a, F, A>{
+impl<'a, F: RefFunctor<'a, Unwrapped = A, Wrapped<'a, A> = F> + 'a, A: 'a> RefFunctor<'a>
+    for Free<'a, F, A>
+{
     type Unwrapped = A;
 
-    type Wrapped<'c, T> = Free<'c, F::Wrapped<'c, T>, T>
-        where 'a : 'c,
-              T : 'a;
-
-    fn fmap<'c, B, F1>(&'a self, f: F1) -> Self::Wrapped<'c, B>
+    type Wrapped<'c, T>
+        = Free<'c, F::Wrapped<'c, T>, T>
     where
-        'a : 'c,
-        F1: 'c + Fn(&Self::Unwrapped) -> B {
+        'a: 'c,
+        T: 'a;
+
+    fn fmap<'c, B, F1>(&'c self, f: F1) -> Self::Wrapped<'c, B>
+    where
+        'a: 'c,
+        F1: 'c + Fn(&Self::Unwrapped) -> B + Clone,
+    {
         todo!()
     }
 
     fn fmap_consume<'c, B, F1>(self, f: F1) -> Self::Wrapped<'c, B>
     where
-        F1: 'c + Fn(Self::Unwrapped) -> B {
-        todo!()
+        'a: 'c,
+        B: 'a,
+        F1: 'c + Fn(Self::Unwrapped) -> B + Clone,
+    {
+        match self {
+            Free::Pure(a) => Free::<'c, F::Wrapped<'c, B>, B>::Pure(f(a)),
+            Free::Free(fa) => {
+                let mapped = fa.fmap_consume(move |x| x.fmap_consume1(f.clone()));
+                // Free::Free(unsafe { Box::from_raw(Box::into_raw(Box::new(mapped)) as *mut _) } )
+                Free::Free(Box::new(mapped))
+            }
+        }
     }
 
+    fn fmap_consume1<B, F1>(self, f: F1) -> Self::Wrapped<'a, B>
+    where
+        B: 'a,
+        F1: Fn(Self::Unwrapped) -> B + Clone {
+        match self {
+            Free::Pure(a) => Free::Pure(f(a)),
+            Free::Free(fa) => {
+                let mapped1 = fa.fmap_consume1(move |x| x.fmap_consume1(f.clone()));
+                let mapped = F::cast::<Free<'_, F, A>, Free<'_, F::Wrapped<'_, B>, B>>(mapped1);
+                // Free::Free(unsafe { Box::from_raw(Box::into_raw(Box::new(mapped)) as *mut _) } )
+                let b = Box::new(mapped);
+                Free::Free(b)
+            }
+        }
+    }
+    
     fn cast<'c, X, Y>(
         mapped: <Self::Wrapped<'c, X> as RefFunctor<'c>>::Wrapped<'c, Y>,
     ) -> Self::Wrapped<'c, Y> {
         todo!()
     }
+    
 }
 
 // impl<F: Functor, A> Functor for Free<F, A> {
@@ -155,7 +189,7 @@ impl<'a, F : RefFunctor<'a, Unwrapped = A, Wrapped<'a, A> = F> + 'a, A : 'a> Ref
 //     fn cast<X, Y>(mapped: Self::Wrapped<Y>) -> Self::Wrapped<Y> {
 //         mapped
 //     }
-    
+
 //     fn fmap_consume<B, F1>(self, mut f: F1) -> Self::Wrapped<B>
 //     where
 //         F1: FnMut(Self::Unwrapped) -> B {
@@ -206,76 +240,87 @@ impl<'a, F : RefFunctor<'a, Unwrapped = A, Wrapped<'a, A> = F> + 'a, A : 'a> Ref
 //         Free::Free(Box::new(fma))
 //     }
 // }
-fn lift_f<F: Functor, A : Clone, M : MonadFree<Base = F, Unwrapped = A>>(v : F::Wrapped<A>) -> M::Wrapped<A>{
-    M::wrap(F::cast(v.fmap_consume(|a|M::pure(a))))
+fn lift_f<F: Functor, A: Clone, M: MonadFree<Base = F, Unwrapped = A>>(
+    v: F::Wrapped<A>,
+) -> M::Wrapped<A> {
+    M::wrap(F::cast(v.fmap_consume(|a| M::pure(a))))
 }
 
-enum TestDsl<'a, T> 
-{
+enum TestDsl<'a, T> {
     ReadInt(Box<dyn Fn(i32) -> T + 'a>),
-    PrintInt(i32, T)
+    PrintInt(i32, T),
 }
-trait RefFunctor<'a> : Identity<Self::Wrapped<'a, Self::Unwrapped>> 
-{
+trait RefFunctor<'a>: Identity<Self::Wrapped<'a, Self::Unwrapped>> {
     type Unwrapped: 'a;
     type Wrapped<'c, T>: RefFunctor<'c, Unwrapped = T, Wrapped<'c, T> = Self::Wrapped<'c, T>>
-        where 'a : 'c,
-              T : 'a;
-    fn fmap<'c, B, F>(&'a self, f: F) -> Self::Wrapped<'c, B>
     where
-        'a : 'c,
-        F: 'c + Fn(&Self::Unwrapped) -> B;
+        'a: 'c,
+        T: 'a;
+    fn fmap<'c, B, F>(&'c self, f: F) -> Self::Wrapped<'c, B>
+    where
+        'a: 'c,
+        B: 'a,
+        F: 'c + Fn(&Self::Unwrapped) -> B + Clone;
     fn fmap_consume<'c, B, F>(self, f: F) -> Self::Wrapped<'c, B>
     where
-        F: 'c + Fn(Self::Unwrapped) -> B;
+        'a: 'c,
+        B: 'a,
+        F: 'c + Fn(Self::Unwrapped) -> B + Clone;
+    fn fmap_consume1<B, F>(self, f: F) -> Self::Wrapped<'a, B>
+    where
+        B: 'a,
+        F: Fn(Self::Unwrapped) -> B + Clone;
     fn cast<'c, X, Y>(
         mapped: <Self::Wrapped<'c, X> as RefFunctor<'c>>::Wrapped<'c, Y>,
     ) -> Self::Wrapped<'c, Y>;
 }
 impl<'b, T> RefFunctor<'b> for TestDsl<'b, T>
-    where T : 'b
+where
+    T: 'b,
 {
     type Unwrapped = T;
 
-    type Wrapped<'c, T1> = TestDsl<'c, T1>
-        where 'b : 'c,
-              T1 : 'b;
+    type Wrapped<'c, T1>
+        = TestDsl<'c, T1>
+    where
+        'b: 'c,
+        T1: 'b;
 
-    fn fmap<'c, B : 'b, F>(&'b self, f: F) -> Self::Wrapped<'c, B>
+    fn fmap<'c, B: 'b, F>(&'c self, f: F) -> Self::Wrapped<'c, B>
     where
-        'b : 'c,
-        F: 'c + Fn(&Self::Unwrapped) -> B {
-            match self {
-                TestDsl::ReadInt(n_f) => TestDsl::ReadInt(Box::new(move |x| f(&n_f(x)))),
-                TestDsl::PrintInt(n, t) => TestDsl::PrintInt(*n, f(t)),
-            }
+        'b: 'c,
+        F: 'c + Fn(&Self::Unwrapped) -> B + Clone,
+    {
+        match self {
+            TestDsl::ReadInt(n_f) => TestDsl::ReadInt(Box::new(move |x| f(&n_f(x)))),
+            TestDsl::PrintInt(n, t) => TestDsl::PrintInt(*n, f(t)),
+        }
     }
-    
-    fn fmap_consume<'c, B : 'b, F>(self, f: F) -> Self::Wrapped<'c, B>
+
+    fn fmap_consume<'c, B: 'b, F>(self, f: F) -> Self::Wrapped<'c, B>
     where
-        'b : 'c,
-        F: 'c + Fn(Self::Unwrapped) -> B {
-            match self {
-                TestDsl::ReadInt(n_f) => TestDsl::ReadInt(Box::new(move |x| f(n_f(x)))),
-                TestDsl::PrintInt(n, t) => TestDsl::PrintInt(n, f(t)),
-            }
+        'b: 'c,
+        F: 'c + Fn(Self::Unwrapped) -> B,
+    {
+        match self {
+            TestDsl::ReadInt(n_f) => TestDsl::ReadInt(Box::new(move |x| f(n_f(x)))),
+            TestDsl::PrintInt(n, t) => TestDsl::PrintInt(n, f(t)),
+        }
     }
-    
-    fn cast<'c, X : 'b, Y : 'b>(
+
+    fn cast<'c, X: 'b, Y: 'b>(
         mapped: <Self::Wrapped<'c, X> as RefFunctor<'c>>::Wrapped<'c, Y>,
-    ) -> Self::Wrapped<'c, Y> 
-        where 'b : 'c {
-        mapped 
+    ) -> Self::Wrapped<'c, Y>
+    where
+        'b: 'c,
+    {
+        mapped
     }
-    
 }
-fn read_int_from_input(){
-
-}
+fn read_int_from_input() {}
 
 #[test]
-fn test_dsl() {
-}
+fn test_dsl() {}
 
 #[test]
 fn test_option() {
