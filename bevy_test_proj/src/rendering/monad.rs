@@ -44,7 +44,21 @@ trait OwnedFunctor<'a>: Identity<Self::OwnedWrapped<'a, Self::OwnedUnwrapped>> {
         mapped: <Self::OwnedWrapped<'c, X> as OwnedFunctor<'c>>::OwnedWrapped<'c, Y>,
     ) -> Self::OwnedWrapped<'c, Y>;
 }
-
+trait OwnedApplicative<'a>: OwnedFunctor<'a> {
+    fn ap<'c, F, B>(self, f: Self::OwnedWrapped<'a, F>) -> Self::OwnedWrapped<'c, B>
+    where
+        'a: 'c,
+        B: 'a,
+        F: 'a + Fn(Self::OwnedUnwrapped) -> B + Clone;
+    fn pure(v: Self::OwnedUnwrapped) -> Self::OwnedWrapped<'a, Self::OwnedUnwrapped>;
+}
+trait OwnedMonad<'a>: OwnedApplicative<'a> {
+    fn bind<F, B>(self, f: F) -> Self::OwnedWrapped<'a, B>
+    where
+        B: 'a,
+        F: 'a + Fn(Self::OwnedUnwrapped) -> Self::OwnedWrapped<'a, B> + Clone;
+}
+#[derive(Clone)]
 enum FreeOwned<'a, F: OwnedFunctor<'a> + 'a + Sized, A: 'a> {
     Pure(A),
     Free(Box<F::OwnedWrapped<'a, FreeOwned<'a, F, A>>>),
@@ -59,21 +73,6 @@ impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, 
     where
         'a: 'c,
         T: 'a;
-
-    // fn fmap<'c, B, F1>(&'c self, f: F1) -> Self::OwnedWrapped<'c, B>
-    // where
-    //     'a: 'c,
-    //     F1: 'a + Fn(&Self::OwnedUnwrapped) -> B + Clone,
-    // {
-    //     match self {
-    //         Free::Pure(a) => Free::<'c, F::OwnedWrapped<'c, B>, B>::Pure(f(a)),
-    //         Free::Free(fa) => {
-    //             let mapped = fa.fmap(move |x: &Free<'_, F, A>| x.fmap(f.clone()));
-    //             Free::Free(unsafe { Box::from_raw(Box::into_raw(Box::new(mapped)) as *mut _) })
-    //         }
-    //     }
-    // }
-
     fn fmap<'c, B, F1>(self, f: F1) -> Self::OwnedWrapped<'c, B>
     where
         'a: 'c,
@@ -95,17 +94,61 @@ impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, 
         todo!()
     }
 }
+impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, A: 'a>
+    OwnedApplicative<'a> for FreeOwned<'a, F, A>
+where
+    Self: Clone,
+{
+    fn ap<'c, F1, B>(self, f: Self::OwnedWrapped<'a, F1>) -> Self::OwnedWrapped<'c, B>
+    where
+        'a: 'c,
+        B: 'a,
+        F1: 'a + Fn(Self::OwnedUnwrapped) -> B + Clone,
+    {
+        match f {
+            FreeOwned::Pure(a) => match self {
+                FreeOwned::Pure(b) => FreeOwned::Pure(a(b)),
+                FreeOwned::Free(mb) => {
+                    let mapped = Box::new(mb.fmap(move |x| x.fmap(a.clone())));
+                    FreeOwned::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
+                }
+            },
+            FreeOwned::Free(ma) => {
+                let mapped = Box::new(ma.fmap(move |x| self.clone().ap(x)));
+                FreeOwned::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
+            }
+        }
+    }
+
+    fn pure(v: Self::OwnedUnwrapped) -> Self::OwnedWrapped<'a, Self::OwnedUnwrapped> {
+        Self::Pure(v)
+    }
+}
+impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, A: 'a> OwnedMonad<'a>
+    for FreeOwned<'a, F, A>
+where
+    Self: Clone,
+{
+    fn bind<F1, B>(self, f: F1) -> Self::OwnedWrapped<'a, B>
+    where
+        B: 'a,
+        F1: 'a + Fn(Self::OwnedUnwrapped) -> Self::OwnedWrapped<'a, B> + Clone,
+    {
+        match self {
+            FreeOwned::Pure(a) => f(a),
+            FreeOwned::Free(m) => { 
+                let mapped = Box::new(m.fmap(move |x| x.bind(f.clone())));
+                FreeOwned::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
+            }
+        }
+    }
+}
 
 // fn lift_f<F: Functor, A: Clone, M: MonadFree<Base = F, Unwrapped = A>>(
 //     v: F::Wrapped<A>,
 // ) -> M::Wrapped<A> {
 //     M::wrap(F::cast(v.fmap_consume(|a| M::pure(a))))
 // }
-trait RefMapper {
-    type Input;
-    type Output<'c> where Self : 'c;
-    fn call<'c>(&self, arg: &'c Self::Input) -> Self::Output<'c>;
-}
 trait RefFunctor<'a>: Identity<Self::RefWrapped<'a, Self::RefUnwrapped>>
 where
     Self: 'a,
@@ -130,34 +173,34 @@ enum FreeShared<'a, F: RefFunctor<'a> + 'a + Sized, A: 'a> {
     Pure(A),
     Free(Arc<F::RefWrapped<'a, FreeShared<'a, F, A>>>),
 }
-impl<'a, F: RefFunctor<'a, RefUnwrapped = A, RefWrapped<'a, A> = F> + 'a, A: 'a> RefFunctor<'a>
-    for FreeShared<'a, F, A>
-{
-    type RefUnwrapped = A;
+// impl<'a, F: RefFunctor<'a, RefUnwrapped = A, RefWrapped<'a, A> = F> + 'a, A: 'a> RefFunctor<'a>
+//     for FreeShared<'a, F, A>
+// {
+//     type RefUnwrapped = A;
 
-    type RefWrapped<'c, T>
-        = FreeShared<'c, F::RefWrapped<'c, T>, T>
-    where
-        'a: 'c,
-        T: 'a;
+//     type RefWrapped<'c, T>
+//         = FreeShared<'c, F::RefWrapped<'c, T>, T>
+//     where
+//         'a: 'c,
+//         T: 'a;
 
-    fn fmap<'c, B, F1>(&'a self, f: F1) -> Self::RefWrapped<'a, B>
-    where
-        'a: 'c,
-        B: 'a,
-        F1: 'a + Fn(&Self::RefUnwrapped) -> B + Clone,
-    {
-        match self {
-            FreeShared::Pure(a) => FreeShared::Pure(f(a)),
-            FreeShared::Free(fa) => {
-                let mapped = fa.fmap(move |x| x.fmap(f.clone()));
-                FreeShared::Free(unsafe {
-                    Arc::from_raw(Arc::into_raw(Arc::new(mapped)) as *mut _)
-                })
-            }
-        }
-    }
-}
+//     fn fmap<'c, B, F1>(&'c self, f: F1) -> Self::RefWrapped<'a, B>
+//     where
+//         'a: 'c,
+//         B: 'a,
+//         F1: 'a + Fn(&Self::RefUnwrapped) -> B + Clone,
+//     {
+//         match self {
+//             FreeShared::Pure(a) => FreeShared::Pure(f(a)),
+//             FreeShared::Free(fa) => {
+//                 let mapped = fa.fmap(move |x| x.fmap(f.clone()));
+//                 FreeShared::Free(unsafe {
+//                     Arc::from_raw(Arc::into_raw(Arc::new(mapped)) as *mut _)
+//                 })
+//             }
+//         }
+//     }
+// }
 
 enum TestDsl<'a, T> {
     ReadInt(Box<dyn Fn(i32) -> T + 'a>),
