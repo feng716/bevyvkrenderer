@@ -15,10 +15,13 @@ impl<T: Sized> Identity<T> for T {
 
 macro_rules! mdo {
     ($i:ident <- $e:expr; $($rest:tt)*) => {
-        $e.bind(&|$i|mdo!($($rest)*))
+        $e.bind(|$i|mdo!($($rest)*))
     };
-    ($e:expr; $($rest:tt)*) => {
-        $e.bind(|_|mdo!($($rest)*))
+    ($e:expr;) => {
+        $e.bind(move |_| crate::rendering::monad::Free::Pure(()))
+    };
+    ($e:expr; $($rest:tt)+) => {
+        $e.bind(move |_|mdo!($($rest)*))
     };
     ($e:expr) => { $e };
 }
@@ -62,37 +65,35 @@ pub trait MonadFree<'a>: OwnedMonad<'a> {
         a: <Self::Base as OwnedFunctor<'a>>::OwnedWrapped<'a, Self::OwnedWrapped<'a, A>>,
     ) -> Self::OwnedWrapped<'a, A>;
 }
-pub enum FreeOwned<'a, F: OwnedFunctor<'a> + 'a + Sized, A: 'a> {
+pub enum Free<'a, F: OwnedFunctor<'a> + 'a + Sized, A: 'a> {
     Pure(A),
-    Free(Box<F::OwnedWrapped<'a, FreeOwned<'a, F, A>>>),
+    Free(Box<F::OwnedWrapped<'a, Free<'a, F, A>>>),
 }
-trait CloneWrapped<'a>: OwnedFunctor<'a> {
-    fn clone_wrapped<'c, T>(
-        wrapped: &Self::OwnedWrapped<'c, T>,
-    ) -> Self::OwnedWrapped<'c, T>
+pub trait CloneWrapped<'a>: OwnedFunctor<'a> {
+    fn clone_wrapped<'c, T>(wrapped: &Self::OwnedWrapped<'c, T>) -> Self::OwnedWrapped<'c, T>
     where
         'a: 'c,
         T: Clone + 'a;
 }
-impl<'a, F, A> Clone for FreeOwned<'a, F, A>
+impl<'a, F, A> Clone for Free<'a, F, A>
 where
     F: OwnedFunctor<'a> + 'a + Sized + CloneWrapped<'a>,
     A: Clone + 'a,
 {
     fn clone(&self) -> Self {
         match self {
-            FreeOwned::Pure(a) => FreeOwned::Pure(a.clone()),
-            FreeOwned::Free(f) => FreeOwned::Free(Box::new(F::clone_wrapped(&f))),
+            Free::Pure(a) => Free::Pure(a.clone()),
+            Free::Free(f) => Free::Free(Box::new(F::clone_wrapped(&f))),
         }
     }
 }
 impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, A: 'a>
-    OwnedFunctor<'a> for FreeOwned<'a, F, A>
+    OwnedFunctor<'a> for Free<'a, F, A>
 {
     type OwnedUnwrapped = A;
 
     type OwnedWrapped<'c, T>
-        = FreeOwned<'c, F::OwnedWrapped<'c, T>, T>
+        = Free<'c, F::OwnedWrapped<'c, T>, T>
     where
         'a: 'c,
         T: 'a;
@@ -103,10 +104,10 @@ impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, 
         F1: 'a + Fn(Self::OwnedUnwrapped) -> B + Clone,
     {
         match self {
-            FreeOwned::Pure(a) => FreeOwned::<'c, F::OwnedWrapped<'c, B>, B>::Pure(f(a)),
-            FreeOwned::Free(fa) => {
+            Free::Pure(a) => Free::<'c, F::OwnedWrapped<'c, B>, B>::Pure(f(a)),
+            Free::Free(fa) => {
                 let mapped = fa.fmap(move |x| x.fmap(f.clone()));
-                FreeOwned::Free(unsafe { Box::from_raw(Box::into_raw(Box::new(mapped)) as *mut _) })
+                Free::Free(unsafe { Box::from_raw(Box::into_raw(Box::new(mapped)) as *mut _) })
             }
         }
     }
@@ -118,7 +119,7 @@ impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, 
     }
 }
 impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, A: 'a>
-    OwnedApplicative<'a> for FreeOwned<'a, F, A>
+    OwnedApplicative<'a> for Free<'a, F, A>
 where
     Self: Clone,
 {
@@ -129,16 +130,16 @@ where
         F1: 'a + Fn(Self::OwnedUnwrapped) -> B + Clone,
     {
         match f {
-            FreeOwned::Pure(a) => match self {
-                FreeOwned::Pure(b) => FreeOwned::Pure(a(b)),
-                FreeOwned::Free(mb) => {
+            Free::Pure(a) => match self {
+                Free::Pure(b) => Free::Pure(a(b)),
+                Free::Free(mb) => {
                     let mapped = Box::new(mb.fmap(move |x| x.fmap(a.clone())));
-                    FreeOwned::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
+                    Free::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
                 }
             },
-            FreeOwned::Free(ma) => {
+            Free::Free(ma) => {
                 let mapped = Box::new(ma.fmap(move |x| self.clone().ap(x)));
-                FreeOwned::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
+                Free::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
             }
         }
     }
@@ -148,7 +149,7 @@ where
     }
 }
 impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F> + 'a, A: 'a>
-    OwnedMonad<'a> for FreeOwned<'a, F, A>
+    OwnedMonad<'a> for Free<'a, F, A>
 where
     Self: Clone,
 {
@@ -158,30 +159,50 @@ where
         F1: 'a + Fn(Self::OwnedUnwrapped) -> Self::OwnedWrapped<'a, B> + Clone,
     {
         match self {
-            FreeOwned::Pure(a) => f(a),
-            FreeOwned::Free(m) => {
+            Free::Pure(a) => f(a),
+            Free::Free(m) => {
                 let mapped = Box::new(m.fmap(move |x| x.bind(f.clone())));
-                FreeOwned::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
+                Free::Free(unsafe { Box::from_raw(Box::into_raw(mapped) as *mut _) })
             }
         }
     }
 }
-impl<'a, F : OwnedFunctor<'a, OwnedUnwrapped = T, OwnedWrapped<'a, T> = F> + 'a, T : 'a> MonadFree<'a> for FreeOwned<'a, F, T>
-    where Self : Clone
+impl<'a, F: OwnedFunctor<'a, OwnedUnwrapped = T, OwnedWrapped<'a, T> = F> + 'a, T: 'a> MonadFree<'a>
+    for Free<'a, F, T>
+where
+    Self: Clone,
 {
     type Base = F::OwnedWrapped<'a, T>;
 
     fn wrap<A>(
         a: <Self::Base as OwnedFunctor<'a>>::OwnedWrapped<'a, Self::OwnedWrapped<'a, A>>,
     ) -> Self::OwnedWrapped<'a, A> {
-        FreeOwned::Free(unsafe { Box::from_raw(Box::into_raw(Box::new(a)) as *mut _)} )
+        Free::Free(unsafe { Box::from_raw(Box::into_raw(Box::new(a)) as *mut _) })
     }
 }
 
-pub fn lift_f<'a, F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F>, A: Clone, M: 'a + MonadFree<'a, Base = F, OwnedUnwrapped = A>>(
+pub fn lift_f<
+    'a,
+    F: OwnedFunctor<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F>,
+    A: Clone,
+    M: 'a + MonadFree<'a, Base = F, OwnedUnwrapped = A>,
+>(
     v: F::OwnedWrapped<'a, A>,
 ) -> M::OwnedWrapped<'a, A> {
     M::wrap(v.fmap(|a| M::pure(a)))
+}
+
+pub fn retract<'a, F: OwnedMonad<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F>, A: 'a>(
+    v: Free<'a, F::OwnedWrapped<'a, A>, A>,
+) -> F::OwnedWrapped<'a, A>
+where
+    F::OwnedWrapped<'a, Free<'a, F, A>>:
+        OwnedMonad<'a, OwnedWrapped<'a, A> = F>,
+{
+    match v {
+        Free::Pure(a) => F::pure(a),
+        Free::Free(a) => (*a).bind::<_, A>(retract::<F, A>),
+    }
 }
 trait RefFunctor<'a>: Identity<Self::RefWrapped<'a, Self::RefUnwrapped>>
 where
@@ -236,122 +257,3 @@ enum FreeShared<'a, F: RefFunctor<'a> + 'a + Sized, A: 'a> {
 //     }
 // }
 
-enum TestDsl<'a, T> {
-    ReadInt(Arc<dyn Fn(i32) -> T + 'a>),
-    PrintInt(i32, T),
-}
-impl<'a, T> Clone for TestDsl<'a, T>
-    where T : Clone
-{
-    fn clone(&self) -> Self {
-        match self {
-            Self::ReadInt(arg0) => Self::ReadInt(arg0.clone()),
-            Self::PrintInt(arg0, arg1) => Self::PrintInt(arg0.clone(), arg1.clone()),
-        }
-    }
-}
-impl<'b, T> OwnedFunctor<'b> for TestDsl<'b, T>
-where
-    T: 'b,
-{
-    type OwnedUnwrapped = T;
-
-    type OwnedWrapped<'c, T1>
-        = TestDsl<'c, T1>
-    where
-        'b: 'c,
-        T1: 'b;
-
-    fn fmap<'c, B: 'b, F>(self, f: F) -> Self::OwnedWrapped<'c, B>
-    where
-        'b: 'c,
-        F: 'c + Fn(Self::OwnedUnwrapped) -> B,
-    {
-        match self {
-            TestDsl::ReadInt(n_f) => TestDsl::ReadInt(Arc::new(move |x| f(n_f(x)))),
-            TestDsl::PrintInt(n, t) => TestDsl::PrintInt(n, f(t)),
-        }
-    }
-
-    fn cast<'c, X: 'b, Y: 'b>(
-        mapped: <Self::OwnedWrapped<'c, X> as OwnedFunctor<'c>>::OwnedWrapped<'c, Y>,
-    ) -> Self::OwnedWrapped<'c, Y>
-    where
-        'b: 'c,
-    {
-        mapped
-    }
-}
-impl<'b, T> RefFunctor<'b> for TestDsl<'b, T>
-where
-    T: 'b,
-{
-    type RefUnwrapped = T;
-
-    type RefWrapped<'c, T1>
-        = TestDsl<'c, T1>
-    where
-        'b: 'c,
-        T1: 'b;
-
-    fn fmap<'c, B, F>(&'b self, f: F) -> Self::RefWrapped<'b, B>
-    where
-        'b: 'c,
-        B: 'b,
-        F: 'b + Fn(&Self::RefUnwrapped) -> B + Clone,
-    {
-        match self {
-            TestDsl::ReadInt(n_f) => TestDsl::ReadInt(Arc::new(move |x| f(&n_f(x)))),
-            TestDsl::PrintInt(n, t) => TestDsl::PrintInt(*n, f(t)),
-        }
-    }
-}
-impl<'b, T> CloneWrapped<'b> for TestDsl<'b, T>
-where
-    T: 'b,
-{
-    fn clone_wrapped<'c, T1>(
-        wrapped: &Self::OwnedWrapped<'c, T1>,
-    ) -> Self::OwnedWrapped<'c, T1>
-    where
-        'b: 'c,
-        T1: Clone + 'b,
-    {
-        wrapped.clone()
-    }
-}
-
-type TestDslF<'a, T> = FreeOwned<'a, TestDsl<'a, T>, T>;
-fn read_int_from_input<'a>() -> TestDslF<'a, i32>{
-    lift_f::<'_, _, _, TestDslF<'_, _>>(TestDsl::ReadInt(Arc::new(|x|x)))
-}
-fn print_tele<'a>(v : i32) -> TestDslF<'a, ()>{
-    lift_f::<'_, _, _, TestDslF<'_, _>>(TestDsl::PrintInt(v, ()))
-}
-fn run_tele<'a, T>(v : TestDslF<'a, T>) {
-    match v {
-        FreeOwned::Pure(a) => (),
-        FreeOwned::Free(step) => match *step {
-            TestDsl::ReadInt(next_f) => {
-                let mut s = String::new();
-                std::io::stdin().read_line(&mut s).unwrap();
-                let number: i32 = s.trim().parse().expect("Please enter a valid integer");
-                run_tele(next_f(number));
-            },
-            TestDsl::PrintInt(n, next_prog) => {
-                println!("{}", n);
-                run_tele(next_prog);
-            },
-        },
-    }
-}
-
-#[test]
-fn test_dsl() {
-    let program = mdo!{
-        val <- read_int_from_input();
-        print_tele(val)
-    };
-    run_tele(program);
-    read_int_from_input();
-}
