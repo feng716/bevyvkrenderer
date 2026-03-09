@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 trait Identity<T>: Sized {
     fn from_same(this: T) -> Self;
@@ -14,8 +14,11 @@ impl<T: Sized> Identity<T> for T {
 }
 
 macro_rules! mdo {
+    ($i:ident <- $e:expr;) => {
+        $e.bind(move |_| crate::rendering::monad::Free::Pure(()))
+    };
     ($i:ident <- $e:expr; $($rest:tt)*) => {
-        $e.bind(|$i|mdo!($($rest)*))
+        $e.bind(move |$i|mdo!($($rest)*))
     };
     ($e:expr;) => {
         $e.bind(move |_| crate::rendering::monad::Free::Pure(()))
@@ -196,8 +199,7 @@ pub fn retract<'a, F: OwnedMonad<'a, OwnedUnwrapped = A, OwnedWrapped<'a, A> = F
     v: Free<'a, F::OwnedWrapped<'a, A>, A>,
 ) -> F::OwnedWrapped<'a, A>
 where
-    F::OwnedWrapped<'a, Free<'a, F, A>>:
-        OwnedMonad<'a, OwnedWrapped<'a, A> = F>,
+    F::OwnedWrapped<'a, Free<'a, F, A>>: OwnedMonad<'a, OwnedWrapped<'a, A> = F>,
 {
     match v {
         Free::Pure(a) => F::pure(a),
@@ -257,3 +259,24 @@ enum FreeShared<'a, F: RefFunctor<'a> + 'a + Sized, A: 'a> {
 //     }
 // }
 
+// trait FTFunctionCons<'a, F: OwnedFunctor<'a>, M: OwnedMonad<'a>, A: 'a, R : 'a> 
+//     where <M as OwnedFunctor<'a>>::OwnedWrapped<'a, R>: 'a,
+// {
+//     type FreeBind : Fn(F::OwnedWrapped<'a, M::OwnedWrapped<'a, R>>) -> M::OwnedWrapped<'a, R>;
+//     type PureBind : Fn(A) -> M::OwnedWrapped<'a, R>;
+// }
+// impl<'a, F: OwnedFunctor<'a>, M: OwnedMonad<'a>, A: 'a, R: 'a, PureBind, FreeBind, RunFT> FTFunctionCons<'a, F, M, A, R> for FT<'a, F, M, A, R>
+// where
+//     FreeBind: Fn(F::OwnedWrapped<'a, M::OwnedWrapped<'a, R>>) -> M::OwnedWrapped<'a, R>,
+//     PureBind: Fn(A) -> M::OwnedWrapped<'a, R>,
+//     <M as OwnedFunctor<'a>>::OwnedWrapped<'a, R>: 'a,
+//     RunFT: Fn(PureBind, FreeBind) -> M::OwnedWrapped<'a, R>{
+//         type FreeBind = PureBind;
+    
+//         type PureBind = FreeBind;
+//     }
+// struct FT<'a, F: OwnedFunctor<'a>, M: OwnedMonad<'a>, A: 'a, R: 'a>
+// {
+//     run_ft: RunFT,
+//     _marker: PhantomData<(&'a i32, F, M, A, R, PureBind, FreeBind)>,
+// }   
