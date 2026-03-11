@@ -17,6 +17,12 @@ macro_rules! mdo {
     ($i:ident <- $e:expr;) => {
         $e.bind(move |_| crate::rendering::monad::Free::Pure(()))
     };
+    (let $i:ident = $e:expr; $($rest:tt)*) => {
+        {
+            let $i = $e;
+            mdo!($($rest)*)
+        }
+    };
     ($i:ident <- $e:expr; $($rest:tt)*) => {
         $e.bind(move |$i|mdo!($($rest)*))
     };

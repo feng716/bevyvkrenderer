@@ -1,7 +1,8 @@
-use std::{fmt::format, marker::PhantomData, sync::Arc};
-
-use bevy::{math::swizzles, reflect::Typed};
-use egui::emath::Float;
+use std::{
+    marker::PhantomData,
+    ops::{Add, Div, Mul, Sub},
+    sync::Arc,
+};
 
 use crate::rendering::{
     self,
@@ -22,7 +23,7 @@ impl<T> Clone for Var<T> {
 }
 impl<T> Copy for Var<T> {}
 impl<T> ToString for Var<T> {
-    fn to_string(&self) -> String{
+    fn to_string(&self) -> String {
         format!("v{}", self.ident)
     }
 }
@@ -37,46 +38,67 @@ impl<T> ToString for Var<T> {
 
 /// TODO)): turn this into compile-time
 #[derive(Clone)]
-enum VarAccessExpr<T, T1, T2> {
+enum VarAccessExpr<T> {
     // T1 and T2 should be ShaderDSL<'a, i32>
     // potentially .xx() cannot be LVar
-    VectorAccessSwizzling(Box<VarAccessExpr<T, T1, T2>>, u32), // ternary or quaternary
-    MatrixAccessSwizzling(Box<VarAccessExpr<T, T1, T2>>, u32, u32), // ternary or quaternary
+    VectorAccessSwizzling(Box<VarAccessExpr<T>>, u32), // ternary or quaternary
+    MatrixAccessSwizzling(Box<VarAccessExpr<T>>, u32, u32), // ternary or quaternary
     Var(T),
-    Array1DAccess(Box<VarAccessExpr<T, T1, T2>>, T1),
-    Array2DAccess(Box<VarAccessExpr<T, T1, T2>>, T1, T2),
+    Array1DAccess(Box<VarAccessExpr<T>>, Var<i32>),
+    Array2DAccess(Box<VarAccessExpr<T>>, Var<i32>, Var<i32>),
 }
 // TODO)): refactor the generic
-impl<T> ToString for VarAccessExpr<Var<T>, PhantomData<()>, PhantomData<()>> {
-    fn to_string(&self) -> String {
-        match self {
-            VarAccessExpr::VectorAccessSwizzling(var_access_expr, swizzle) => format!("{}.{}", var_access_expr.to_string(), decode_swizzle(*swizzle)),
-            VarAccessExpr::MatrixAccessSwizzling(var_access_expr, _, _) => todo!(),
-            VarAccessExpr::Var(v) => v.to_string(),
-            VarAccessExpr::Array1DAccess(var_access_expr, _) => panic!(),
-            VarAccessExpr::Array2DAccess(var_access_expr, _, _) => panic!(),
+fn access_to_string<T>(k: &VarAccessExpr<Var<T>>) -> String {
+    match k {
+        VarAccessExpr::VectorAccessSwizzling(var_access_expr, swizzle) => format!(
+            "{}.{}",
+            var_access_expr.to_string(),
+            decode_swizzle(*swizzle)
+        ),
+        VarAccessExpr::MatrixAccessSwizzling(var_access_expr, _, _) => todo!(),
+        VarAccessExpr::Var(v) => v.to_string(),
+        VarAccessExpr::Array1DAccess(var_access_expr, i) => {
+            format!("{}[{}]", var_access_expr.to_string(), i.to_string())
         }
+        VarAccessExpr::Array2DAccess(var_access_expr, i, j) => format!(
+            "{}[{}][{}]",
+            var_access_expr.to_string(),
+            i.to_string(),
+            j.to_string()
+        ),
     }
 }
-struct TypedAccessExpr<T, T1, T2, CurrentT> {
-    v: VarAccessExpr<T, T1, T2>,
-    _marker: PhantomData<CurrentT>,
-}
-impl<T, T1, T2, CurrentT> ToString for TypedAccessExpr<T, T1, T2, CurrentT> {
+impl<T> ToString for VarAccessExpr<Var<T>> {
     fn to_string(&self) -> String {
-        match self.v {
-            VarAccessExpr::VectorAccessSwizzling(var_access_expr, swizzle) => format!("{}.{}", var_access_expr, decode_swizzle(swizzle)),
-            VarAccessExpr::MatrixAccessSwizzling(var_access_expr, _, _) => todo!(),
-            VarAccessExpr::Var(_) => todo!(),
-            VarAccessExpr::Array1DAccess(var_access_expr, _) => todo!(),
-            VarAccessExpr::Array2DAccess(var_access_expr, _, _) => todo!(),
-        }
+        access_to_string(self)
     }
 }
 #[derive(Clone)]
-struct VarAccess<T, T1, T2> {
+struct TypedAccessExpr<T, CurrentT> {
+    v: VarAccessExpr<T>,
+    _marker: PhantomData<CurrentT>,
+}
+impl<T, CurrentT> ToString for TypedAccessExpr<Var<T>, CurrentT> {
+    fn to_string(&self) -> String {
+        access_to_string(&self.v)
+    }
+}
+struct VarAccess<T> {
     v: Var<T>,
-    v_access: VarAccessExpr<Var<T>, T1, T2>, // Var(&'a T)
+    v_access: VarAccessExpr<Var<T>>,
+}
+impl<T> Clone for VarAccess<T> {
+    fn clone(&self) -> Self {
+        Self {
+            v: self.v.clone(),
+            v_access: self.v_access.clone(),
+        }
+    }
+}
+impl<T> ToString for VarAccess<T> {
+    fn to_string(&self) -> String {
+        access_to_string(&self.v_access)
+    }
 }
 
 // Receiving RValue : Into<ShaderDSL<'a, T>>, impl this for Var<T>, VarAccessExpr,
@@ -90,13 +112,17 @@ enum ShaderDSLF<'a, T> {
     Else(T),
     While(Var<bool>, T),
     Set(String, T),
-    Call(FuncName, Vec<FuncArg>, T),
+    Call(Option<String>, FuncName, Vec<FuncArg>, T),
 }
 #[derive(Clone)]
 enum FuncName {
     MakeFloat4,
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
-#[derive(Clone)]
+#[derive(Clone, shader_macros::DisplayInner)]
 enum FuncArg {
     F32(Var<f32>),
     F32_2(Var<Vec2<f32>>),
@@ -136,7 +162,9 @@ where
             Self::Else(arg0) => Self::Else(arg0.clone()),
             Self::While(arg0, arg1) => Self::While(arg0.clone(), arg1.clone()),
             Self::Set(arg0, arg1) => Self::Set(arg0.clone(), arg1.clone()),
-            Self::Call(arg0, arg1, arg2) => Self::Call(arg0.clone(), arg1.clone(), arg2.clone()),
+            Self::Call(arg0, arg1, arg2, arg3) => {
+                Self::Call(arg0.clone(), arg1.clone(), arg2.clone(), arg3.clone())
+            }
         }
     }
 }
@@ -165,8 +193,8 @@ where
             ShaderDSLF::Else(t) => ShaderDSLF::Else(f(t)),
             ShaderDSLF::While(var, t) => ShaderDSLF::While(var, f(t)),
             ShaderDSLF::Set(var, t) => ShaderDSLF::Set(var, f(t)),
-            ShaderDSLF::Call(func_name, func_args, t) => {
-                ShaderDSLF::Call(func_name, func_args, f(t))
+            ShaderDSLF::Call(rt, func_name, func_args, t) => {
+                ShaderDSLF::Call(rt, func_name, func_args, f(t))
             }
         }
     }
@@ -219,7 +247,10 @@ where
 
 type ShaderDSL<'a, T> = Free<'a, ShaderDSLF<'a, T>, T>;
 fn _new_ident<'a, T>() -> ShaderDSL<'a, Var<T>> {
-    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::NewIdent(Arc::new(|x| Var { ident : x, _marker : PhantomData })))
+    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::NewIdent(Arc::new(|x| Var {
+        ident: x,
+        _marker: PhantomData,
+    })))
 }
 fn _begin_scope<'a>() -> ShaderDSL<'a, ()> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::BeginScope(()))
@@ -233,10 +264,17 @@ fn _if_statement<'a>(cond: Var<bool>) -> ShaderDSL<'a, ()> {
 fn _else_statement<'a>() -> ShaderDSL<'a, ()> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Else(()))
 }
-fn _call_func<'a, T: Clone>(f: FuncName, args: Vec<FuncArg>, rt: T) -> ShaderDSL<'a, T> {
-    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Call(f, args, rt))
+fn _call_func_rt<'a, T: Clone + ToString>(
+    f: FuncName,
+    args: Vec<FuncArg>,
+    rt: T,
+) -> ShaderDSL<'a, T> {
+    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Call(Some(rt.to_string()), f, args, rt))
 }
-fn _set_statement<'a>(v : String, assigned : String) -> ShaderDSL<'a, ()> {
+fn _call_func<'a>(f: FuncName, args: Vec<FuncArg>) -> ShaderDSL<'a, ()> {
+    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Call(None, f, args, ()))
+}
+fn _set_statement<'a>(v: String, assigned: String) -> ShaderDSL<'a, ()> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Set(format!("{} = {}", v, assigned), ()))
 }
 
@@ -381,9 +419,50 @@ fn _build_shader<'a, T>(v: ShaderDSL<'a, T>, str: String, ident: i32) -> String 
             ShaderDSLF::While(var, t) => {
                 _build_shader(t, str + format!("\nwhile(v{})", var.ident).as_str(), ident)
             }
-            ShaderDSLF::Set(_, _) => todo!(),
-            ShaderDSLF::Call(func_name, func_args, _) => todo!(),
+            ShaderDSLF::Set(s, t) => _build_shader(t, str + format!("\n{};", s).as_str(), ident),
+            ShaderDSLF::Call(rt, func_name, func_args, t) => {
+                let v: Vec<_> = func_args.iter().map(|v| v.to_string()).collect();
+                // {}({})
+                let call_fn = |fn_name| match fn_name {
+                    FuncName::MakeFloat4 => format!("vec4f({})", v.join(",")),
+                    FuncName::Add => format!("{} + {}", v[0], v[1]),
+                    FuncName::Sub => format!("{} - {}", v[0], v[1]),
+                    FuncName::Mul => format!("{} * {}", v[0], v[1]),
+                    FuncName::Div => format!("{} / {}", v[0], v[1]),
+                };
+                _build_shader(
+                    t,
+                    format!(
+                        "{}\n{}{};",
+                        str,
+                        rt.map_or(String::from(""), |v| format!("{} = ", v)),
+                        call_fn(func_name)
+                    ),
+                    ident,
+                )
+            }
         },
+    }
+}
+impl<'a, T> From<Var<T>> for ShaderDSL<'a, Var<T>> {
+    fn from(val: Var<T>) -> Self {
+        Free::Pure(val)
+    }
+}
+impl<'a, T: 'a> From<VarAccess<T>> for ShaderDSL<'a, Var<T>> {
+    fn from(val: VarAccess<T>) -> Self {
+        Free::Pure(val.v)
+    }
+}
+impl<'a, T: 'a, CurrentT: Clone> From<TypedAccessExpr<Var<T>, CurrentT>>
+    for ShaderDSL<'a, Var<CurrentT>>
+{
+    fn from(val: TypedAccessExpr<Var<T>, CurrentT>) -> Self {
+        mdo! {
+            new_ident <- _new_ident();
+            _set_statement(new_ident.to_string(), val.to_string());
+            Free::Pure(new_ident)
+        }
     }
 }
 impl<'a> From<i32> for ShaderDSL<'a, Var<i32>> {
@@ -426,7 +505,7 @@ struct Array2D<T>(PhantomData<T>);
 
 macro_rules! typed_expr_swizzle {
     ($name:ident, $ret:ident) => {
-        pub fn $name(self) -> TypedAccessExpr<BaseVar, T1, T2, $ret<T>> {
+        pub fn $name(self) -> TypedAccessExpr<BaseVar, $ret<T>> {
             const MASK: u32 = encode_swizzle(stringify!($name));
             TypedAccessExpr {
                 v: VarAccessExpr::VectorAccessSwizzling(Box::new(self.v), MASK),
@@ -437,7 +516,7 @@ macro_rules! typed_expr_swizzle {
 }
 macro_rules! typed_expr_swizzle_scalar {
     ($name:ident) => {
-        pub fn $name(self) -> TypedAccessExpr<BaseVar, T1, T2, T> {
+        pub fn $name(self) -> TypedAccessExpr<BaseVar, T> {
             const MASK: u32 = encode_swizzle(stringify!($name));
             TypedAccessExpr {
                 v: VarAccessExpr::VectorAccessSwizzling(Box::new(self.v), MASK),
@@ -448,10 +527,10 @@ macro_rules! typed_expr_swizzle_scalar {
 }
 macro_rules! var_access_swizzle {
     ($name:ident, $source:ident, $ret:ident) => {
-        pub fn $name(self) -> TypedAccessExpr<Var<$source<T>>, T1, T2, $ret<T>> {
+        pub fn $name(self) -> TypedAccessExpr<Var<$source<T>>, $ret<T>> {
             const MASK: u32 = encode_swizzle(stringify!($name));
             TypedAccessExpr {
-                v: VarAccessExpr::VectorAccessSwizzling(Box::new(self.v_access), MASK),
+                v: VarAccessExpr::VectorAccessSwizzling(Box::new(VarAccessExpr::Var(self)), MASK),
                 _marker: PhantomData,
             }
         }
@@ -460,16 +539,16 @@ macro_rules! var_access_swizzle {
 
 macro_rules! var_access_swizzle_scalar {
     ($name:ident, $source:ident) => {
-        pub fn $name(self) -> TypedAccessExpr<Var<$source<T>>, T1, T2, T> {
+        pub fn $name(self) -> TypedAccessExpr<Var<$source<T>>, T> {
             const MASK: u32 = encode_swizzle(stringify!($name));
             TypedAccessExpr {
-                v: VarAccessExpr::VectorAccessSwizzling(Box::new(self.v_access), MASK),
+                v: VarAccessExpr::VectorAccessSwizzling(Box::new(VarAccessExpr::Var(self)), MASK),
                 _marker: PhantomData,
             }
         }
     };
 }
-impl<BaseVar, T1, T2, T> TypedAccessExpr<BaseVar, T1, T2, Vec4<T>> {
+impl<BaseVar, T> TypedAccessExpr<BaseVar, Vec4<T>> {
     typed_expr_swizzle_scalar!(x);
     typed_expr_swizzle_scalar!(y);
     typed_expr_swizzle_scalar!(z);
@@ -538,7 +617,7 @@ impl<BaseVar, T1, T2, T> TypedAccessExpr<BaseVar, T1, T2, Vec4<T>> {
     typed_expr_swizzle!(wzxy, Vec4);
     typed_expr_swizzle!(wzyx, Vec4);
 }
-impl<BaseVar, T1, T2, T> TypedAccessExpr<BaseVar, T1, T2, Vec3<T>> {
+impl<BaseVar, T> TypedAccessExpr<BaseVar, Vec3<T>> {
     typed_expr_swizzle_scalar!(x);
     typed_expr_swizzle_scalar!(y);
     typed_expr_swizzle_scalar!(z);
@@ -557,14 +636,14 @@ impl<BaseVar, T1, T2, T> TypedAccessExpr<BaseVar, T1, T2, Vec3<T>> {
     typed_expr_swizzle!(zxy, Vec3);
     typed_expr_swizzle!(zyx, Vec3);
 }
-impl<BaseVar, T1, T2, T> TypedAccessExpr<BaseVar, T1, T2, Vec2<T>> {
+impl<BaseVar, T> TypedAccessExpr<BaseVar, Vec2<T>> {
     typed_expr_swizzle_scalar!(x);
     typed_expr_swizzle_scalar!(y);
 
     typed_expr_swizzle!(xy, Vec2);
     typed_expr_swizzle!(yx, Vec2);
 }
-impl<T, T1, T2> VarAccess<Vec4<T>, T1, T2> {
+impl<T> Var<Vec4<T>> {
     var_access_swizzle_scalar!(x, Vec4);
     var_access_swizzle_scalar!(y, Vec4);
     var_access_swizzle_scalar!(z, Vec4);
@@ -637,7 +716,7 @@ impl<T, T1, T2> VarAccess<Vec4<T>, T1, T2> {
 // ==========================================
 // VEC3 INITIAL ACCESS
 // ==========================================
-impl<T, T1, T2> VarAccess<Vec3<T>, T1, T2> {
+impl<T> Var<Vec3<T>> {
     var_access_swizzle_scalar!(x, Vec3);
     var_access_swizzle_scalar!(y, Vec3);
     var_access_swizzle_scalar!(z, Vec3);
@@ -660,54 +739,57 @@ impl<T, T1, T2> VarAccess<Vec3<T>, T1, T2> {
 // ==========================================
 // VEC2 INITIAL ACCESS
 // ==========================================
-impl<T, T1, T2> VarAccess<Vec2<T>, T1, T2> {
+impl<T> Var<Vec2<T>> {
     var_access_swizzle_scalar!(x, Vec2);
     var_access_swizzle_scalar!(y, Vec2);
 
     var_access_swizzle!(xy, Vec2, Vec2);
     var_access_swizzle!(yx, Vec2, Vec2);
 }
-impl<'a, T> VarAccess<Array1D<T>, ShaderDSL<'a, i32>, PhantomData<()>> {
+impl<'a, T> Var<Array1D<T>> {
     pub fn at(
         self,
-        v: impl Into<ShaderDSL<'a, i32>>,
-    ) -> TypedAccessExpr<Var<Array1D<T>>, ShaderDSL<'a, i32>, PhantomData<()>, T> {
-        TypedAccessExpr {
-            v: VarAccessExpr::Array1DAccess(Box::new(self.v_access), v.into()),
-            _marker: PhantomData,
+        mv: impl Into<ShaderDSL<'a, Var<i32>>>,
+    ) -> ShaderDSL<'a, TypedAccessExpr<Var<Array1D<T>>, T>> {
+        mdo! {
+            v <- mv.into();
+            Free::Pure(TypedAccessExpr {
+                v: VarAccessExpr::Array1DAccess(Box::new(VarAccessExpr::Var(self)), v),
+                _marker: PhantomData,
+            })
         }
     }
 }
-impl<'a, T> VarAccess<Array2D<T>, ShaderDSL<'a, i32>, ShaderDSL<'a, i32>> {
+impl<'a, T> Var<Array2D<T>> {
     pub fn at(
         self,
-        v1: impl Into<ShaderDSL<'a, i32>>,
-        v2: impl Into<ShaderDSL<'a, i32>>,
-    ) -> TypedAccessExpr<Var<Array2D<T>>, ShaderDSL<'a, i32>, ShaderDSL<'a, i32>, T> {
-        TypedAccessExpr {
-            v: VarAccessExpr::Array2DAccess(Box::new(self.v_access), v1.into(), v2.into()),
-            _marker: PhantomData,
+        mv1: impl Into<ShaderDSL<'a, Var<i32>>>,
+        mv2: impl Into<ShaderDSL<'a, Var<i32>>>,
+    ) -> ShaderDSL<'a, TypedAccessExpr<Var<Array2D<T>>, T>> {
+        let v1 = Arc::new(mv1.into());
+        let v2 = Arc::new(mv2.into());
+        _mdo_move! {
+            [v1, v2]
+            v1 <- (*v1).clone();
+            v2 <- (*v2).clone();
+            Free::Pure( TypedAccessExpr {
+                v: VarAccessExpr::Array2DAccess(Box::new(VarAccessExpr::Var(self)), v1, v2),
+                _marker: PhantomData,
+            })
         }
     }
 }
 macro_rules! make_float4_op {
-    // 1-argument version
     ($a:expr $(,)?) => {{
         let a_val = Arc::new($a);
         _mdo_move! {
-            [a_val]
             ident <- _new_ident();
             v1 <- (*a_val).clone();
-            _call_func(FuncName::MakeFloat4, vec![v1.into()], 
-                VarAccess {
-                    v : ident,
-                    v_access: VarAccessExpr::Var(ident)
-                }
+            _call_func_rt(FuncName::MakeFloat4, vec![v1.into()],
+                ident
             )
         }
     }};
-
-    // 2-argument version
     ($a:expr, $b:expr $(,)?) => {{
         let a_val = Arc::new($a);
         let b_val = Arc::new($b);
@@ -716,16 +798,11 @@ macro_rules! make_float4_op {
             ident <- _new_ident();
             v1 <- (*a_val).clone();
             v2 <- (*b_val).clone();
-            _call_func(FuncName::MakeFloat4, vec![v1.into(), v2.into()], 
-                VarAccess {
-                    v : ident,
-                    v_access: VarAccessExpr::Var(ident)
-                }
+            _call_func_rt(FuncName::MakeFloat4, vec![v1.into(), v2.into()],
+                ident
             )
         }
     }};
-
-    // 3-argument version
     ($a:expr, $b:expr, $c:expr $(,)?) => {{
         let a_val = Arc::new($a);
         let b_val = Arc::new($b);
@@ -736,16 +813,11 @@ macro_rules! make_float4_op {
             v1 <- (*a_val).clone();
             v2 <- (*b_val).clone();
             v3 <- (*c_val).clone();
-            _call_func(FuncName::MakeFloat4, vec![v1.into(), v2.into(), v3.into()], 
-                VarAccess {
-                    v : ident,
-                    v_access: VarAccessExpr::Var(ident)
-                }
+            _call_func_rt(FuncName::MakeFloat4, vec![v1.into(), v2.into(), v3.into()],
+                ident
             )
         }
     }};
-
-    // 4-argument version
     ($a:expr, $b:expr, $c:expr, $d:expr $(,)?) => {{
         let a_val = Arc::new($a);
         let b_val = Arc::new($b);
@@ -758,22 +830,14 @@ macro_rules! make_float4_op {
             v2 <- (*b_val).clone();
             v3 <- (*c_val).clone();
             v4 <- (*d_val).clone();
-            _call_func(FuncName::MakeFloat4, vec![v1.into(), v2.into(), v3.into(), v4.into()], 
-                VarAccess {
-                    v : ident,
-                    v_access: VarAccessExpr::Var(ident)
-                }
+            _call_func_rt(FuncName::MakeFloat4, vec![v1.into(), v2.into(), v3.into(), v4.into()],
+                    ident
             )
         }
     }};
 }
 trait IntoFloat4<'a> {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>>;
-}
-trait AccessArg<'a, T> {
-    type R1: 'a;
-    type R2: 'a;
-    fn get(self) -> ShaderDSL<'a, VarAccess<T, Self::R1, Self::R2>>;
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>>;
 }
 impl<'a> IntoFloat4<'a>
     for (
@@ -783,7 +847,7 @@ impl<'a> IntoFloat4<'a>
         ShaderDSL<'a, Var<f32>>,
     )
 {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0, self.1, self.2, self.3)
     }
 }
@@ -794,11 +858,10 @@ impl<'a> IntoFloat4<'a>
         ShaderDSL<'a, Var<f32>>,
     )
 {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0, self.1, self.2)
     }
 }
-
 impl<'a> IntoFloat4<'a>
     for (
         ShaderDSL<'a, Var<f32>>,
@@ -806,11 +869,10 @@ impl<'a> IntoFloat4<'a>
         ShaderDSL<'a, Var<f32>>,
     )
 {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0, self.1, self.2)
     }
 }
-
 impl<'a> IntoFloat4<'a>
     for (
         ShaderDSL<'a, Var<f32>>,
@@ -818,73 +880,134 @@ impl<'a> IntoFloat4<'a>
         ShaderDSL<'a, Var<Vec2<f32>>>,
     )
 {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0, self.1, self.2)
     }
 }
 impl<'a> IntoFloat4<'a> for (ShaderDSL<'a, Var<Vec2<f32>>>, ShaderDSL<'a, Var<Vec2<f32>>>) {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0, self.1)
     }
 }
 impl<'a> IntoFloat4<'a> for (ShaderDSL<'a, Var<Vec3<f32>>>, ShaderDSL<'a, Var<f32>>) {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0, self.1)
     }
 }
-
 impl<'a> IntoFloat4<'a> for (ShaderDSL<'a, Var<f32>>, ShaderDSL<'a, Var<Vec3<f32>>>) {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0, self.1)
     }
 }
 impl<'a> IntoFloat4<'a> for (ShaderDSL<'a, Var<f32>>,) {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0)
     }
 }
-
 impl<'a> IntoFloat4<'a> for (ShaderDSL<'a, Var<Vec4<f32>>>,) {
-    fn into_float4(self) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+    fn into_float4(self) -> ShaderDSL<'a, Var<Vec4<f32>>> {
         make_float4_op!(self.0)
     }
 }
 
-fn make_float4_impl<'a, T: IntoFloat4<'a>>(
-    v: T,
-) -> ShaderDSL<'a, VarAccess<Vec4<f32>, PhantomData<()>, PhantomData<()>>> {
+fn make_float4_impl<'a, T: IntoFloat4<'a>>(v: T) -> ShaderDSL<'a, Var<Vec4<f32>>> {
     v.into_float4()
 }
 trait IntoShaderVar<'a> {
-    type InnerT; 
-    fn into_shader_var(self) -> ShaderDSL<'a, Var<Self::InnerT>>;
+    type InnerT;
+    fn in_context(self) -> ShaderDSL<'a, Var<Self::InnerT>>;
 }
 
 impl<'a> IntoShaderVar<'a> for f32 {
     type InnerT = f32;
-    fn into_shader_var(self) -> ShaderDSL<'a, Var<f32>> {
-        self.into() 
+    fn in_context(self) -> ShaderDSL<'a, Var<f32>> {
+        self.into()
     }
 }
 
 impl<'a, T> IntoShaderVar<'a> for ShaderDSL<'a, Var<T>> {
     type InnerT = T;
-    fn into_shader_var(self) -> ShaderDSL<'a, Var<T>> {
+    fn in_context(self) -> ShaderDSL<'a, Var<T>> {
         self
     }
 }
-impl<'a, T, T1, T2, CurrentT> IntoShaderVar<'a> for TypedAccessExpr<T, T1, T2, CurrentT>{
-    type InnerT = T;
-    fn into_shader_var(self) -> ShaderDSL<'a, Var<CurrentT>> {
-        mdo!{
-            
-        }
+impl<'a, T: 'a, CurrentT: Clone> IntoShaderVar<'a> for TypedAccessExpr<Var<T>, CurrentT> {
+    type InnerT = CurrentT;
+    fn in_context(self) -> ShaderDSL<'a, Var<CurrentT>> {
+        self.into()
     }
 }
+impl<'a, T: 'a> IntoShaderVar<'a> for Var<T> {
+    type InnerT = T;
+    fn in_context(self) -> ShaderDSL<'a, Var<T>> {
+        self.into()
+    }
+}
+fn dsl_binary_op<'a, A, B, T>(op: FuncName, a: A, b: B) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    B: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    let a_dsl = Arc::new(a.into());
+    let b_dsl = Arc::new(b.into());
+    let op = Arc::new(op);
+
+    _mdo_move! {
+        [a_dsl, b_dsl, op]
+        ident <- _new_ident();
+        v1 <- (*a_dsl).clone();
+        v2 <- (*b_dsl).clone();
+        _call_func_rt(
+            (*op).clone(),
+            vec![v1.into(), v2.into()],
+            ident
+        )
+    }
+}
+
+macro_rules! impl_math_ops {
+    ($trait:ident, $method:ident, $func_name:ident, $impl_type:ty) => {
+        // 1. ShaderDSL + T (where T is anything that can become a ShaderDSL)
+        impl<'a, T: Into<ShaderDSL<'a, Var<$impl_type>>>> $trait<T>
+            for ShaderDSL<'a, Var<$impl_type>>
+        {
+            type Output = ShaderDSL<'a, Var<$impl_type>>;
+            fn $method(self, rhs: T) -> Self::Output {
+                dsl_binary_op(FuncName::$func_name, self, rhs)
+            }
+        }
+        // 2. Var + ShaderDSL
+        impl<'a> $trait<ShaderDSL<'a, Var<$impl_type>>> for Var<$impl_type> {
+            type Output = ShaderDSL<'a, Var<$impl_type>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$impl_type>>) -> Self::Output {
+                dsl_binary_op(FuncName::$func_name, self, rhs)
+            }
+        }
+        // 3. TypedAccessExpr + ShaderDSL -> ShaderDSL
+        impl<'a, B: 'a> $trait<ShaderDSL<'a, Var<$impl_type>>>
+            for TypedAccessExpr<Var<B>, $impl_type>
+        {
+            type Output = ShaderDSL<'a, Var<$impl_type>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$impl_type>>) -> Self::Output {
+                let lhs_dsl: ShaderDSL<'a, Var<$impl_type>> = self.into();
+                dsl_binary_op(FuncName::$func_name, lhs_dsl, rhs)
+            }
+        }
+    };
+}
+impl_math_ops!(Add, add, Add, f32);
+impl_math_ops!(Add, add, Add, Vec2<f32>);
+impl_math_ops!(Add, add, Add, Vec3<f32>);
+impl_math_ops!(Add, add, Add, Vec4<f32>);
+impl_math_ops!(Sub, sub, Sub, f32);
+impl_math_ops!(Sub, sub, Sub, Vec2<f32>);
+impl_math_ops!(Mul, mul, Mul, f32);
+impl_math_ops!(Div, div, Div, f32);
 #[macro_export]
 macro_rules! make_float4 {
     ($($arg:expr),* $(,)?) => {
-        make_float4_impl(( $($arg.into_shader_var(),)* ))
+        make_float4_impl(( $($arg.in_context(),)* ))
     };
 }
 
@@ -893,6 +1016,8 @@ fn test_dsl() {
     let program: ShaderDSL<'_, ()> = mdo! {
         val2 <- make_float4!(1.);
         val3 <- make_float4!(val2.x());
+        _a <- val2 + val3.in_context();
+        val4 <- make_float4!(val2.xy(), _a.xy());
     };
     println!("{}", _build_shader(program, String::from(""), 0));
 }
