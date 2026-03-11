@@ -13,9 +13,10 @@ impl<T: Sized> Identity<T> for T {
     }
 }
 
+#[macro_export]
 macro_rules! mdo {
     ($i:ident <- $e:expr;) => {
-        $e.bind(move |_| crate::rendering::monad::Free::Pure(()))
+        $e.bind(move |_| Free::Pure(()))
     };
     (let $i:ident = $e:expr; $($rest:tt)*) => {
         {
@@ -27,7 +28,7 @@ macro_rules! mdo {
         $e.bind(move |$i|mdo!($($rest)*))
     };
     ($e:expr;) => {
-        $e.bind(move |_| crate::rendering::monad::Free::Pure(()))
+        $e.bind(move |_| Free::Pure(()))
     };
     ($e:expr; $($rest:tt)+) => {
         $e.bind(move |_|mdo!($($rest)*))
