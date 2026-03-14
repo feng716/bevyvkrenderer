@@ -3,9 +3,15 @@ name = "bevy_test_proj"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "shader_dsl"
+
 [[bin]]
 name = "test-bevy"
 path = "src/main.rs"
+[[bin]]
+name = "wgsl-shader-dsl"
+path = "src/wgpu_shader_dsl.rs"
 
 [profile.dev]
 opt-level = 1
@@ -22,6 +28,14 @@ egui = "0.33.3"
 gpu-allocator = "0.28.0"
 raw-window-handle = "0.6.2"
 shader_macros = { path = "../shader_macros"}
+
+winit = "0.29.15"
+wgpu = "0.19.3"
+pollster = "0.3.0"
+bytemuck = { version = "1.15", features = ["derive"] }
+glam = "0.32.1"
+paste = "1.0.15"
+p = "0.0.0"
 
 [build-dependencies]
 bindgen = "0.72.1"

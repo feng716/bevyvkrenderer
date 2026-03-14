@@ -1,32 +1,45 @@
+use std::collections::HashMap;
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::rendering::dsl::builtin_func::{ForDSL, ForM, ShaderCmp, ShaderLift2, dot, length, set};
 use crate::rendering::dsl::cast::ShaderCast;
+use crate::rendering::dsl::vec_op::TypedAccessExpr;
 use crate::{make_float4, mdo};
 
 use super::monad::{lift_f, CloneWrapped, Free, OwnedApplicative, OwnedFunctor, OwnedMonad};
 use super::vec_op::{make_float4_impl, Vec2, Vec3, Vec4};
 
+#[derive(Copy, Clone)]
+pub enum VarType {
+    Global,
+    Local
+}
 pub struct Var<T> {
     pub(crate) ident: i32,
     pub(crate) _marker: PhantomData<T>,
+    pub(crate) t: VarType
 }
 impl<T> Clone for Var<T> {
     fn clone(&self) -> Self {
         Self {
             ident: self.ident.clone(),
             _marker: PhantomData,
+            t: self.t
         }
     }
 }
 impl<T> Copy for Var<T> {}
 impl<T> ToString for Var<T> {
     fn to_string(&self) -> String {
-        format!("v{}", self.ident)
+        match self.t {
+            VarType::Global => format!("g{}", self.ident),
+            VarType::Local => format!("v{}", self.ident),
+        }
+        
     }
 }
 
-pub(super) enum ShaderDSLF<'a, T> {
+pub enum ShaderDSLF<'a, T> {
     NewIdent(Arc<dyn Fn(i32) -> T + 'a>),
     BeginScope(T),
     EndScope(T),
@@ -39,26 +52,11 @@ pub(super) enum ShaderDSLF<'a, T> {
     Return(String, T)
 }
 #[derive(Clone)]
-pub(super) enum FuncName {
+pub enum FuncName {
     MakeFloat4,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    BitAnd,
-    BitOr,
-    BitXor,
-    Shl,
-    Shr,
+    BiOp(&'static str),
     Neg,
     Not,
-    Eq,
-    Neq,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
     Dot,
     Cross,
     Pow,
@@ -73,10 +71,12 @@ pub(super) enum FuncName {
     MakeFloat2,
     Break,
     Continue,
+    NormalFunctionInvoke(&'static str),
     Cast(&'static str),
+    CallExtFn(&'static str, Arc<String>, Arc<HashMap<&'static str, Arc<String>>>)
 }
 #[derive(Clone, shader_macros::DisplayInner)]
-pub(super) enum FuncArg {
+pub enum FuncArg {
     F32(Var<f32>),
     F32_2(Var<Vec2<f32>>),
     F32_3(Var<Vec3<f32>>),
@@ -84,6 +84,7 @@ pub(super) enum FuncArg {
     Bool(Var<bool>),
     I32(Var<i32>),
     U32(Var<u32>),
+    StructName(String)
 }
 impl From<Var<f32>> for FuncArg {
     fn from(v: Var<f32>) -> Self {
@@ -219,10 +220,11 @@ where
 }
 
 pub type ShaderDSL<'a, T> = Free<'a, ShaderDSLF<'a, T>, T>;
-pub(super) fn _new_ident<'a, T>() -> ShaderDSL<'a, Var<T>> {
+pub fn _new_ident<'a, T>() -> ShaderDSL<'a, Var<T>> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::NewIdent(Arc::new(|x| Var {
         ident: x,
         _marker: PhantomData,
+        t: VarType::Local
     })))
 }
 pub(super) fn _begin_scope<'a>() -> ShaderDSL<'a, ()> {
@@ -240,7 +242,7 @@ pub(super) fn _else_statement<'a>() -> ShaderDSL<'a, ()> {
 pub(super) fn _continuing_statement<'a>() -> ShaderDSL<'a, ()> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Continuing(()))
 }
-pub(super) fn _call_func_rt<'a, T: Clone + ToString>(
+pub fn _call_func_rt<'a, T: Clone + ToString>(
     f: FuncName,
     args: Vec<FuncArg>,
     rt: T,
@@ -270,7 +272,7 @@ pub(super) fn _continue_statement<'a>() -> ShaderDSL<'a, ()> {
     _call_func(FuncName::Continue, vec![])
 }
 #[derive(Clone)]
-struct IfBuilder<'a, T: Clone> {
+pub struct IfBuilder<'a, T: Clone> {
     condition: ShaderDSL<'a, Var<bool>>,
     true_branch: ShaderDSL<'a, T>,
 }
@@ -288,7 +290,6 @@ macro_rules! _mdo_move {
 
     ([$($c:ident),*] $i:ident <- $e:expr; $($rest:tt)*) => {
         $e.bind({
-            // Inject clones BEFORE the closure is created
             $( let $c = $c.clone(); )*
             move |$i| _mdo_move!([$($c),*] $($rest)*)
         })
@@ -296,7 +297,6 @@ macro_rules! _mdo_move {
 
     ([$($c:ident),*] $e:expr; $($rest:tt)*) => {
         $e.bind({
-            // Inject clones BEFORE the closure is created
             $( let $c = $c.clone(); )*
             move |_| _mdo_move!([$($c),*] $($rest)*)
         })
@@ -335,10 +335,11 @@ impl<'a, T: Clone> IfBuilder<'a, T> {
             _end_scope()
         }
     }
-    pub fn bind<F>(self, f: F) -> ShaderDSL<'a, ()>
+    pub fn bind<F, S>(self, f: F) -> ShaderDSL<'a, S>
     where
         T: Copy,
-        F: 'a + Fn(T) -> ShaderDSL<'a, ()> + Clone,
+        S: Copy,
+        F: 'a + Fn(T) -> ShaderDSL<'a, S> + Clone,
     {
         let s = Arc::new(self.true_branch);
         _mdo_move! {
@@ -417,24 +418,8 @@ fn _build_shader<'a, T>(v: ShaderDSL<'a, T>, str: String, ident: i32) -> String 
                     FuncName::MakeFloat4 => format!("vec4f({})", v.join(",")),
                     FuncName::MakeFloat3 => format!("vec3f({})", v.join(",")),
                     FuncName::MakeFloat2 => format!("vec2f({})", v.join(",")),
-                    FuncName::Add => format!("{} + {}", v[0], v[1]),
-                    FuncName::Sub => format!("{} - {}", v[0], v[1]),
-                    FuncName::Mul => format!("{} * {}", v[0], v[1]),
-                    FuncName::Div => format!("{} / {}", v[0], v[1]),
-                    FuncName::Rem => format!("{} % {}", v[0], v[1]),
-                    FuncName::BitAnd => format!("{} & {}", v[0], v[1]),
-                    FuncName::BitOr => format!("{} | {}", v[0], v[1]),
-                    FuncName::BitXor => format!("{} ^ {}", v[0], v[1]),
-                    FuncName::Shl => format!("{} << {}", v[0], v[1]),
-                    FuncName::Shr => format!("{} >> {}", v[0], v[1]),
                     FuncName::Neg => format!("-{}", v[0]),
                     FuncName::Not => format!("!{}", v[0]),
-                    FuncName::Eq => format!("{} == {}", v[0], v[1]),
-                    FuncName::Neq => format!("{} != {}", v[0], v[1]),
-                    FuncName::Lt => format!("{} < {}", v[0], v[1]),
-                    FuncName::Lte => format!("{} <= {}", v[0], v[1]),
-                    FuncName::Gt => format!("{} > {}", v[0], v[1]),
-                    FuncName::Gte => format!("{} >= {}", v[0], v[1]),
                     FuncName::Normalize => format!("normalize({})", v[0]),
                     FuncName::Length => format!("length({})", v[0]),
                     FuncName::Dot => format!("dot({}, {})", v[0], v[1]),
@@ -448,6 +433,9 @@ fn _build_shader<'a, T>(v: ShaderDSL<'a, T>, str: String, ident: i32) -> String 
                     FuncName::Break => "break".to_string(),
                     FuncName::Continue => "continue".to_string(),
                     FuncName::Cast(t) => format!("{}({})", t, v[0]),
+                    FuncName::CallExtFn(_, _, _) => todo!(),
+                    FuncName::NormalFunctionInvoke(_) => todo!(),
+                    FuncName::BiOp(_) => todo!(),
                 };
                 _build_shader(
                     t,
@@ -471,35 +459,25 @@ impl<'a, T> From<Var<T>> for ShaderDSL<'a, Var<T>> {
     }
 }
 
-impl<'a> From<i32> for ShaderDSL<'a, Var<i32>> {
-    fn from(value: i32) -> Self {
-        mdo! {
-            val <- _new_ident();
-            _set_statement_let(val.to_string(), value.to_string());
-            Free::Pure(val)
+macro_rules! constant_from {
+    ($t:ty) => {
+        impl<'a> From<$t> for ShaderDSL<'a, Var<$t>> {
+            fn from(value: $t) -> Self {
+                mdo! {
+                    val <- _new_ident();
+                    _set_statement_let(val.to_string(), value.to_string());
+                    Free::Pure(val)
+                }
+            }
         }
-    }
+    };
 }
-impl<'a> From<f32> for ShaderDSL<'a, Var<f32>> {
-    fn from(value: f32) -> Self {
-        mdo! {
-            val <- _new_ident();
-            _set_statement_let(val.to_string(), format!("{}f", value.to_string()));
-            Free::Pure(val)
-        }
-    }
-}
-impl<'a> From<bool> for ShaderDSL<'a, Var<bool>> {
-    fn from(value: bool) -> Self {
-        mdo! {
-            val <- _new_ident();
-            _set_statement_let(val.to_string(), value.to_string());
-            Free::Pure(val)
-        }
-    }
-}
+constant_from!(i32);
+constant_from!(u32);
+constant_from!(f32);
+constant_from!(bool);
 
-pub(super) trait IntoShaderVar<'a> {
+pub trait IntoShaderVar<'a> {
     type InnerT;
     fn in_context(self) -> ShaderDSL<'a, Var<Self::InnerT>>;
 }

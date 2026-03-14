@@ -27,6 +27,7 @@ pub enum VarAccessExpr<T> {
     Var(T),
     Array1DAccess(Box<VarAccessExpr<T>>, Var<i32>),
     Array2DAccess(Box<VarAccessExpr<T>>, Var<i32>, Var<i32>),
+    StructFieldAccess(Box<VarAccessExpr<T>>, &'static str)
 }
 // TODO)): refactor the generic
 fn access_to_string<T>(k: &VarAccessExpr<Var<T>>) -> String {
@@ -47,6 +48,7 @@ fn access_to_string<T>(k: &VarAccessExpr<Var<T>>) -> String {
             i.to_string(),
             j.to_string()
         ),
+        VarAccessExpr::StructFieldAccess(var_access_expr, fd) => format!("{}.{}", var_access_expr.to_string(), fd),
     }
 }
 impl<T> ToString for VarAccessExpr<Var<T>> {
@@ -97,10 +99,17 @@ fn decode_swizzle(mask: u32) -> String {
 
     result
 }
-#[derive(Clone)]
-pub(super) struct TypedAccessExpr<T, CurrentT> {
-    v: VarAccessExpr<T>,
-    _marker: PhantomData<CurrentT>,
+pub struct TypedAccessExpr<T, CurrentT> {
+    pub(crate) v: VarAccessExpr<T>,
+    pub(crate) _marker: PhantomData<CurrentT>,
+}
+impl<T: Clone, CurrentT> Clone for TypedAccessExpr<T, CurrentT> {
+    fn clone(&self) -> Self {
+        TypedAccessExpr {
+            v: self.v.clone(),
+            _marker: PhantomData, 
+        }
+    }
 }
 impl<'a, T: 'a, CurrentT: Clone> IntoShaderVar<'a> for TypedAccessExpr<Var<T>, CurrentT> {
     type InnerT = CurrentT;
@@ -143,6 +152,34 @@ macro_rules! typed_expr_swizzle_scalar {
             TypedAccessExpr {
                 v: VarAccessExpr::VectorAccessSwizzling(Box::new(self.v), MASK),
                 _marker: PhantomData,
+            }
+        }
+    };
+}
+macro_rules! monad_typed_expr_swizzle {
+    ($name:ident, $ret:ident) => {
+        pub fn $name(self) -> ShaderDSL<'a, TypedAccessExpr<BaseVar, $ret<T>>> {
+            const MASK: u32 = encode_swizzle(stringify!($name));
+            mdo!{
+                s <- self;
+                Free::Pure(TypedAccessExpr {
+                    v: VarAccessExpr::VectorAccessSwizzling(Box::new(s.v), MASK),
+                    _marker: PhantomData,
+                })
+            }
+        }
+    };
+}
+macro_rules! monad_typed_expr_swizzle_scalar {
+    ($name:ident) => {
+        pub fn $name(self) -> ShaderDSL<'a, TypedAccessExpr<BaseVar, T>> {
+            const MASK: u32 = encode_swizzle(stringify!($name));
+            mdo!{
+                s <- self;
+                Free::Pure(TypedAccessExpr {
+                    v: VarAccessExpr::VectorAccessSwizzling(Box::new(s.v), MASK),
+                    _marker: PhantomData,
+                })
             }
         }
     };
@@ -362,6 +399,102 @@ impl<T> Var<Vec2<T>> {
     var_access_swizzle!(xy, Vec2, Vec2);
     var_access_swizzle!(yx, Vec2, Vec2);
 }
+impl<'a, BaseVar: Clone, T> ShaderDSL<'a, TypedAccessExpr<BaseVar, Vec4<T>>> {
+
+    monad_typed_expr_swizzle_scalar!(x);
+    monad_typed_expr_swizzle_scalar!(y);
+    monad_typed_expr_swizzle_scalar!(z);
+    monad_typed_expr_swizzle_scalar!(w);
+
+    monad_typed_expr_swizzle!(xy, Vec2);
+    monad_typed_expr_swizzle!(xz, Vec2);
+    monad_typed_expr_swizzle!(xw, Vec2);
+    monad_typed_expr_swizzle!(yx, Vec2);
+    monad_typed_expr_swizzle!(yz, Vec2);
+    monad_typed_expr_swizzle!(yw, Vec2);
+    monad_typed_expr_swizzle!(zx, Vec2);
+    monad_typed_expr_swizzle!(zy, Vec2);
+    monad_typed_expr_swizzle!(zw, Vec2);
+    monad_typed_expr_swizzle!(wx, Vec2);
+    monad_typed_expr_swizzle!(wy, Vec2);
+    monad_typed_expr_swizzle!(wz, Vec2);
+
+    monad_typed_expr_swizzle!(xyz, Vec3);
+    monad_typed_expr_swizzle!(xyw, Vec3);
+    monad_typed_expr_swizzle!(xzy, Vec3);
+    monad_typed_expr_swizzle!(xzw, Vec3);
+    monad_typed_expr_swizzle!(xwy, Vec3);
+    monad_typed_expr_swizzle!(xwz, Vec3);
+    monad_typed_expr_swizzle!(yxz, Vec3);
+    monad_typed_expr_swizzle!(yxw, Vec3);
+    monad_typed_expr_swizzle!(yzx, Vec3);
+    monad_typed_expr_swizzle!(yzw, Vec3);
+    monad_typed_expr_swizzle!(ywx, Vec3);
+    monad_typed_expr_swizzle!(ywz, Vec3);
+    monad_typed_expr_swizzle!(zxy, Vec3);
+    monad_typed_expr_swizzle!(zxw, Vec3);
+    monad_typed_expr_swizzle!(zyx, Vec3);
+    monad_typed_expr_swizzle!(zyw, Vec3);
+    monad_typed_expr_swizzle!(zwx, Vec3);
+    monad_typed_expr_swizzle!(zwy, Vec3);
+    monad_typed_expr_swizzle!(wxy, Vec3);
+    monad_typed_expr_swizzle!(wxz, Vec3);
+    monad_typed_expr_swizzle!(wyx, Vec3);
+    monad_typed_expr_swizzle!(wyz, Vec3);
+    monad_typed_expr_swizzle!(wzx, Vec3);
+    monad_typed_expr_swizzle!(wzy, Vec3);
+
+    monad_typed_expr_swizzle!(xyzw, Vec4);
+    monad_typed_expr_swizzle!(xywz, Vec4);
+    monad_typed_expr_swizzle!(xzyw, Vec4);
+    monad_typed_expr_swizzle!(xzwy, Vec4);
+    monad_typed_expr_swizzle!(xwyz, Vec4);
+    monad_typed_expr_swizzle!(xwzy, Vec4);
+    monad_typed_expr_swizzle!(yxzw, Vec4);
+    monad_typed_expr_swizzle!(yxwz, Vec4);
+    monad_typed_expr_swizzle!(yzxw, Vec4);
+    monad_typed_expr_swizzle!(yzwx, Vec4);
+    monad_typed_expr_swizzle!(ywxz, Vec4);
+    monad_typed_expr_swizzle!(ywzx, Vec4);
+    monad_typed_expr_swizzle!(zxyw, Vec4);
+    monad_typed_expr_swizzle!(zxwy, Vec4);
+    monad_typed_expr_swizzle!(zyxw, Vec4);
+    monad_typed_expr_swizzle!(zywx, Vec4);
+    monad_typed_expr_swizzle!(zwxy, Vec4);
+    monad_typed_expr_swizzle!(zwyx, Vec4);
+    monad_typed_expr_swizzle!(wxyz, Vec4);
+    monad_typed_expr_swizzle!(wxzy, Vec4);
+    monad_typed_expr_swizzle!(wyxz, Vec4);
+    monad_typed_expr_swizzle!(wyzx, Vec4);
+    monad_typed_expr_swizzle!(wzxy, Vec4);
+    monad_typed_expr_swizzle!(wzyx, Vec4);
+}
+impl<'a, BaseVar: Clone, T> ShaderDSL<'a, TypedAccessExpr<BaseVar, Vec3<T>>> {
+    monad_typed_expr_swizzle_scalar!(x);
+    monad_typed_expr_swizzle_scalar!(y);
+    monad_typed_expr_swizzle_scalar!(z);
+
+    monad_typed_expr_swizzle!(xy, Vec2);
+    monad_typed_expr_swizzle!(xz, Vec2);
+    monad_typed_expr_swizzle!(yx, Vec2);
+    monad_typed_expr_swizzle!(yz, Vec2);
+    monad_typed_expr_swizzle!(zx, Vec2);
+    monad_typed_expr_swizzle!(zy, Vec2);
+
+    monad_typed_expr_swizzle!(xyz, Vec3);
+    monad_typed_expr_swizzle!(xzy, Vec3);
+    monad_typed_expr_swizzle!(yxz, Vec3);
+    monad_typed_expr_swizzle!(yzx, Vec3);
+    monad_typed_expr_swizzle!(zxy, Vec3);
+    monad_typed_expr_swizzle!(zyx, Vec3);
+}
+impl<'a, BaseVar: Clone, T> ShaderDSL<'a, TypedAccessExpr<BaseVar, Vec2<T>>> {
+    monad_typed_expr_swizzle_scalar!(x);
+    monad_typed_expr_swizzle_scalar!(y);
+
+    monad_typed_expr_swizzle!(xy, Vec2);
+    monad_typed_expr_swizzle!(yx, Vec2);
+}
 impl<'a, T: 'a, CurrentT: Clone> From<TypedAccessExpr<Var<T>, CurrentT>>
     for ShaderDSL<'a, Var<CurrentT>>
 {
@@ -431,21 +564,23 @@ where
 }
 
 macro_rules! impl_math_ops {
-    ($trait:ident, $method:ident, $func_name:ident, $impl_type:ty) => {
+    ($trait:ident, $method:ident, $func_name:expr, $impl_type:ty) => {
         // 1. ShaderDSL + T (where T is anything that can become a ShaderDSL)
         impl<'a, T: Into<ShaderDSL<'a, Var<$impl_type>>>> $trait<T>
             for ShaderDSL<'a, Var<$impl_type>>
         {
             type Output = ShaderDSL<'a, Var<$impl_type>>;
             fn $method(self, rhs: T) -> Self::Output {
-                dsl_binary_op(FuncName::$func_name, self, rhs)
+                dsl_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
+
+
         // 2. Var + ShaderDSL
         impl<'a> $trait<ShaderDSL<'a, Var<$impl_type>>> for Var<$impl_type> {
             type Output = ShaderDSL<'a, Var<$impl_type>>;
             fn $method(self, rhs: ShaderDSL<'a, Var<$impl_type>>) -> Self::Output {
-                dsl_binary_op(FuncName::$func_name, self, rhs)
+                dsl_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
         // 3. TypedAccessExpr + ShaderDSL -> ShaderDSL
@@ -455,31 +590,54 @@ macro_rules! impl_math_ops {
             type Output = ShaderDSL<'a, Var<$impl_type>>;
             fn $method(self, rhs: ShaderDSL<'a, Var<$impl_type>>) -> Self::Output {
                 let lhs_dsl: ShaderDSL<'a, Var<$impl_type>> = self.into();
-                dsl_binary_op(FuncName::$func_name, lhs_dsl, rhs)
+                dsl_binary_op(FuncName::BiOp($func_name), lhs_dsl, rhs)
             }
         }
     };
 }
-impl_math_ops!(Add, add, Add, f32);
-impl_math_ops!(Add, add, Add, i32);
-impl_math_ops!(Add, add, Add, Vec2<f32>);
-impl_math_ops!(Add, add, Add, Vec3<f32>);
-impl_math_ops!(Add, add, Add, Vec4<f32>);
-impl_math_ops!(Sub, sub, Sub, f32);
-impl_math_ops!(Sub, sub, Sub, Vec2<f32>);
-impl_math_ops!(Mul, mul, Mul, f32);
-impl_math_ops!(Div, div, Div, f32);
-impl_math_ops!(Rem, rem, Rem, f32);
-impl_math_ops!(Rem, rem, Rem, i32);
-impl_math_ops!(Rem, rem, Rem, u32);
-impl_math_ops!(BitAnd, bitand, BitAnd, u32);
-impl_math_ops!(BitAnd, bitand, BitAnd, i32);
-impl_math_ops!(BitOr, bitor, BitOr, u32);
-impl_math_ops!(BitOr, bitor, BitOr, i32);
-impl_math_ops!(BitXor, bitxor, BitXor, u32);
-impl_math_ops!(BitXor, bitxor, BitXor, i32);
-impl_math_ops!(Shl, shl, Shl, u32);
-impl_math_ops!(Shr, shr, Shr, u32);
+impl_math_ops!(Add, add, "+", f32);
+impl_math_ops!(Add, add, "+", u32);
+impl_math_ops!(Add, add, "+", i32);
+impl_math_ops!(Add, add, "+", Vec2<f32>);
+impl_math_ops!(Add, add, "+", Vec3<f32>);
+impl_math_ops!(Add, add, "+", Vec4<f32>);
+impl_math_ops!(Sub, sub, "-", f32);
+impl_math_ops!(Sub, sub, "-", Vec2<f32>);
+impl_math_ops!(Sub, sub, "-", Vec3<f32>);
+impl_math_ops!(Mul, mul, "*", f32);
+impl_math_ops!(Mul, mul, "*", u32);
+impl_math_ops!(Mul, mul, "*", Vec3<f32>);
+impl_math_ops!(Div, div, "/", f32);
+impl_math_ops!(Div, div, "/", Vec3<f32>);
+impl_math_ops!(Div, div, "/", Vec2<f32>);
+impl_math_ops!(Rem, rem, "%", f32);
+impl_math_ops!(Rem, rem, "%", i32);
+impl_math_ops!(Rem, rem, "%", u32);
+impl_math_ops!(BitAnd, bitand, "&", u32);
+impl_math_ops!(BitAnd, bitand, "&", i32);
+impl_math_ops!(BitOr, bitor, "|", u32);
+impl_math_ops!(BitOr, bitor, "|", i32);
+impl_math_ops!(BitXor, bitxor, "^", u32);
+impl_math_ops!(BitXor, bitxor, "^", i32);
+impl_math_ops!(Shl, shl, "<<", u32);
+impl_math_ops!(Shr, shr, ">>", u32);
+macro_rules! impl_one_side_math_ops {
+    ($trait:ident, $method:ident, $func_name:expr, $impl_type:ty) => {
+        impl<'a> $trait<ShaderDSL<'a, Var<$impl_type>>> for $impl_type {
+            type Output = ShaderDSL<'a, Var<$impl_type>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$impl_type>>) -> Self::Output {
+                dsl_binary_op(FuncName::BiOp($func_name), self, rhs)
+            }
+        }
+    };
+}
+impl_one_side_math_ops!(Mul, mul, "*", u32);
+impl_one_side_math_ops!(Mul, mul, "*", f32);
+impl_one_side_math_ops!(Div, div, "/", f32);
+impl_one_side_math_ops!(Add, add, "+", u32);
+impl_one_side_math_ops!(Sub, sub, "-", f32);
+impl_one_side_math_ops!(Shl, shl, "<<", u32);
+impl_one_side_math_ops!(Shr, shr, ">>", u32);
 fn dsl_unary_op<'a, A, T>(op: FuncName, a: A) -> ShaderDSL<'a, Var<T>>
 where
     A: Into<ShaderDSL<'a, Var<T>>>,
@@ -752,87 +910,87 @@ where
 }
 
 macro_rules! impl_mixed_math_ops {
-    ($trait:ident, $method:ident, $func_name:ident, $vec_type:ident, $scalar_type:ident) => {
-        // --------------------------------------------------------
-        // VEC OP SCALAR -> VEC
-        // --------------------------------------------------------
-        
-        // 1. ShaderDSL<Vec> + ShaderDSL<Scalar>
+    ($trait:ident, $method:ident, $func_name:expr, $vec_type:ident, $scalar_type:ident) => {
+
+        impl<'a> $trait<$scalar_type> for ShaderDSL<'a, Var<$vec_type<f32>>> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: $scalar_type) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
+            }
+        }
+
         impl<'a> $trait<ShaderDSL<'a, Var<$scalar_type>>> for ShaderDSL<'a, Var<$vec_type<f32>>> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: ShaderDSL<'a, Var<$scalar_type>>) -> Self::Output {
-                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
 
-        // 2. ShaderDSL<Vec> + Var<Scalar>
         impl<'a> $trait<Var<$scalar_type>> for ShaderDSL<'a, Var<$vec_type<f32>>> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: Var<$scalar_type>) -> Self::Output {
-                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
         
-        // 3. Var<Vec> + ShaderDSL<Scalar>
         impl<'a> $trait<ShaderDSL<'a, Var<$scalar_type>>> for Var<$vec_type<f32>> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: ShaderDSL<'a, Var<$scalar_type>>) -> Self::Output {
-                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
 
-        // 4. TypedAccessExpr<Vec> + ShaderDSL<Scalar>
         impl<'a, B: 'a> $trait<ShaderDSL<'a, Var<$scalar_type>>> for TypedAccessExpr<Var<B>, $vec_type<f32>> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: ShaderDSL<'a, Var<$scalar_type>>) -> Self::Output {
                 let lhs_dsl: ShaderDSL<'a, Var<$vec_type<f32>>> = self.into();
-                dsl_mixed_binary_op(FuncName::$func_name, lhs_dsl, rhs)
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), lhs_dsl, rhs)
             }
         }
 
-        // --------------------------------------------------------
-        // SCALAR OP VEC -> VEC
-        // --------------------------------------------------------
-
-        // 5. ShaderDSL<Scalar> + ShaderDSL<Vec>
         impl<'a> $trait<ShaderDSL<'a, Var<$vec_type<f32>>>> for ShaderDSL<'a, Var<$scalar_type>> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: ShaderDSL<'a, Var<$vec_type<f32>>>) -> Self::Output {
-                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
 
-        // 6. ShaderDSL<Scalar> + Var<Vec>
         impl<'a> $trait<Var<$vec_type<f32>>> for ShaderDSL<'a, Var<$scalar_type>> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: Var<$vec_type<f32>>) -> Self::Output {
-                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
 
-        // 7. Var<Scalar> + ShaderDSL<Vec>
         impl<'a> $trait<ShaderDSL<'a, Var<$vec_type<f32>>>> for Var<$scalar_type> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: ShaderDSL<'a, Var<$vec_type<f32>>>) -> Self::Output {
-                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
 
-        // 8. TypedAccessExpr<Scalar> + ShaderDSL<Vec>
         impl<'a, B: 'a> $trait<ShaderDSL<'a, Var<$vec_type<f32>>>> for TypedAccessExpr<Var<B>, $scalar_type> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: ShaderDSL<'a, Var<$vec_type<f32>>>) -> Self::Output {
                 let lhs_dsl: ShaderDSL<'a, Var<$scalar_type>> = self.into();
-                dsl_mixed_binary_op(FuncName::$func_name, lhs_dsl, rhs)
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), lhs_dsl, rhs)
             }
         }
     };
 }
 
-impl_mixed_math_ops!(Mul, mul, Mul, Vec2, f32);
-impl_mixed_math_ops!(Mul, mul, Mul, Vec3, f32);
-impl_mixed_math_ops!(Mul, mul, Mul, Vec4, f32);
+impl_mixed_math_ops!(Sub, sub, "-", Vec2, f32);
+impl_mixed_math_ops!(Sub, sub, "-", Vec3, f32);
+impl_mixed_math_ops!(Sub, sub, "-", Vec4, f32);
 
-impl_mixed_math_ops!(Div, div, Div, Vec2, f32);
-impl_mixed_math_ops!(Div, div, Div, Vec3, f32);
-impl_mixed_math_ops!(Div, div, Div, Vec4, f32);
+impl_mixed_math_ops!(Add, add, "+", Vec2, f32);
+impl_mixed_math_ops!(Add, add, "+", Vec3, f32);
+impl_mixed_math_ops!(Add, add, "+", Vec4, f32);
+
+impl_mixed_math_ops!(Mul, mul, "*", Vec2, f32);
+impl_mixed_math_ops!(Mul, mul, "*", Vec3, f32);
+impl_mixed_math_ops!(Mul, mul, "*", Vec4, f32);
+
+impl_mixed_math_ops!(Div, div, "/", Vec2, f32);
+impl_mixed_math_ops!(Div, div, "/", Vec3, f32);
+impl_mixed_math_ops!(Div, div, "/", Vec4, f32);

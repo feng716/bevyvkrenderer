@@ -16,7 +16,7 @@ impl WgslType for Vec4<f32> { fn wgsl_name() -> &'static str { "vec4f" } }
 impl WgslType for Vec2<u32> { fn wgsl_name() -> &'static str { "vec2u" } }
 impl WgslType for Vec3<u32> { fn wgsl_name() -> &'static str { "vec3u" } }
 impl WgslType for Vec4<u32> { fn wgsl_name() -> &'static str { "vec4u" } }
-
+impl<T: WgslType> WgslType for Var<T> { fn wgsl_name() -> &'static str { T::wgsl_name() } }
 pub trait ShaderCast<'a, T> {
     fn cast<U: WgslType>(self) -> ShaderDSL<'a, Var<U>>;
 }

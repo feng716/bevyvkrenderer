@@ -1,11 +1,12 @@
 use std::{ops::Range, sync::Arc};
+use paste::paste;
 
 use crate::{
     _mdo_move, mdo, rendering::dsl::{
         monad::{ Free, OwnedMonad},
-        shader_dsl::{_begin_scope, _break_statement, _call_func, _call_func_rt, _continue_statement, _continuing_statement, _end_scope, _if_statement, _loop_statement, _new_ident, _set_statement_reassign, FuncArg, FuncName, IntoShaderVar, ShaderDSL, Var, while_},
+        shader_dsl::{_begin_scope, _break_statement, _call_func, _call_func_rt, _continue_statement, _continuing_statement, _end_scope, _if_statement, _loop_statement, _new_ident, _set_statement_reassign, FuncArg, FuncName, IntoShaderVar, ShaderDSL, Var, while_, _return_statement},
         vec_op::{TypedAccessExpr, Vec3},
-    }
+    }, 
 };
 
 fn dsl_cmp_op<'a, A, B, T: 'a>(op: FuncName, a: A, b: B) -> ShaderDSL<'a, Var<bool>>
@@ -44,22 +45,38 @@ where
     Var<T>: Into<FuncArg>,
 {
     fn eq<B: Into<ShaderDSL<'a, Var<T>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
-        dsl_cmp_op(FuncName::Eq, self, other)
+        dsl_cmp_op(FuncName::BiOp("="), self, other)
     }
     fn neq<B: Into<ShaderDSL<'a, Var<T>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
-        dsl_cmp_op(FuncName::Neq, self, other)
+        dsl_cmp_op(FuncName::BiOp("!="), self, other)
     }
     fn lt<B: Into<ShaderDSL<'a, Var<T>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
-        dsl_cmp_op(FuncName::Lt, self, other)
+        dsl_cmp_op(FuncName::BiOp("<"), self, other)
     }
     fn lte<B: Into<ShaderDSL<'a, Var<T>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
-        dsl_cmp_op(FuncName::Lte, self, other)
+        dsl_cmp_op(FuncName::BiOp("<="), self, other)
     }
     fn gt<B: Into<ShaderDSL<'a, Var<T>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
-        dsl_cmp_op(FuncName::Gt, self, other)
+        dsl_cmp_op(FuncName::BiOp(">"), self, other)
     }
     fn gte<B: Into<ShaderDSL<'a, Var<T>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
-        dsl_cmp_op(FuncName::Gte, self, other)
+        dsl_cmp_op(FuncName::BiOp(">="), self, other)
+    }
+}
+pub trait ShaderLogic<'a> {
+    fn and<B: Into<ShaderDSL<'a, Var<bool>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>>;
+    fn or<B: Into<ShaderDSL<'a, Var<bool>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>>;
+}
+impl<'a, A> ShaderLogic<'a> for A
+where
+    A: Into<ShaderDSL<'a, Var<bool>>>,
+{
+    fn and<B: Into<ShaderDSL<'a, Var<bool>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
+        dsl_cmp_op(FuncName::BiOp("&&"), self, other)
+    }
+
+    fn or<B: Into<ShaderDSL<'a, Var<bool>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
+        dsl_cmp_op(FuncName::BiOp("||"), self, other)
     }
 }
 
@@ -100,17 +117,19 @@ where
     }
 }
 
-pub fn dsl_builtin_3<'a, A, B, C, InputT: 'a, RetT>(
+pub fn dsl_builtin_3<'a, A, B, C, InputT1: 'a, InputT2: 'a, InputT3: 'a, RetT>(
     op: FuncName,
     a: A,
     b: B,
     c: C,
 ) -> ShaderDSL<'a, Var<RetT>>
 where
-    A: Into<ShaderDSL<'a, Var<InputT>>>,
-    B: Into<ShaderDSL<'a, Var<InputT>>>,
-    C: Into<ShaderDSL<'a, Var<InputT>>>,
-    Var<InputT>: Into<FuncArg>,
+    A: Into<ShaderDSL<'a, Var<InputT1>>>,
+    B: Into<ShaderDSL<'a, Var<InputT2>>>,
+    C: Into<ShaderDSL<'a, Var<InputT3>>>,
+    Var<InputT1>: Into<FuncArg>,
+    Var<InputT2>: Into<FuncArg>,
+    Var<InputT3>: Into<FuncArg>,
 {
     let a_dsl = Arc::new(a.into());
     let b_dsl = Arc::new(b.into());
@@ -132,7 +151,56 @@ where
 {
     dsl_builtin_1(FuncName::Normalize, a)
 }
+pub fn abs<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("abs"), a)
+}
+pub fn sin<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("sin"), a)
+}
+pub fn radians<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("radian"), a)
+}
+pub fn cos<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("cos"), a)
+}
 
+pub fn tan<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("tan"), a)
+}
+pub fn sqrt<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("sqrt"), a)
+}
+pub fn sign<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("sign"), a)
+}
 pub fn length<'a, A, T: 'a>(a: A) -> ShaderDSL<'a, Var<f32>>
 where
     A: Into<ShaderDSL<'a, Var<T>>>,
@@ -142,13 +210,28 @@ where
 }
 
 pub fn dot<'a, A, B, T: 'a>(a: A, b: B) -> ShaderDSL<'a, Var<f32>>
-// Always returns f32
 where
     A: Into<ShaderDSL<'a, Var<T>>>,
     B: Into<ShaderDSL<'a, Var<T>>>,
     Var<T>: Into<FuncArg>,
 {
     dsl_builtin_2(FuncName::Dot, a, b)
+}
+pub fn max<'a, A, B, T: 'a>(a: A, b: B) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    B: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_2(FuncName::NormalFunctionInvoke("max"), a, b)
+}
+pub fn min<'a, A, B, T: 'a>(a: A, b: B) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    B: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_2(FuncName::NormalFunctionInvoke("min"), a, b)
 }
 
 pub fn cross<'a, A, B>(a: A, b: B) -> ShaderDSL<'a, Var<Vec3<f32>>>
@@ -198,6 +281,17 @@ where
     dsl_builtin_3(FuncName::Mix, a, b, c)
 }
 
+pub fn select<'a, A, B, C, T>(a: A, b: B, c: C) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    B: Into<ShaderDSL<'a, Var<T>>>,
+    C: Into<ShaderDSL<'a, Var<bool>>>,
+    Var<T>: Into<FuncArg>,
+    Var<bool>: Into<FuncArg>
+{
+    dsl_builtin_3(FuncName::NormalFunctionInvoke("select"), a, b, c)
+}
+
 pub fn clamp<'a, A, B, C, T>(a: A, b: B, c: C) -> ShaderDSL<'a, Var<T>>
 where
     A: Into<ShaderDSL<'a, Var<T>>>,
@@ -218,9 +312,9 @@ macro_rules! impl_shader_lift {
                 $($M: Into<ShaderDSL<'a, Var<$T>>>),*;
         }
 
-        impl<'a, $($T : 'a),*, Ret : 'a, F> $trait_name<'a, $($T),*, Ret> for F
+        impl<'a, $($T : 'a),*, Ret : 'a, F1> $trait_name<'a, $($T),*, Ret> for F1
         where
-            F: Fn($(Var<$T>),*) -> ShaderDSL<'a, Var<Ret>> + 'a + Clone,
+            F1: Fn($(Var<$T>),*) -> ShaderDSL<'a, Var<Ret>> + 'a + Clone,
             $($T: Clone + 'a),*
         {
             fn in_context<$($M),*>(&self, $($arg: $M),*) -> ShaderDSL<'a, Var<Ret>>
@@ -254,26 +348,104 @@ impl_shader_lift!(
     (C, MC, mc, mc_dsl, c),
     (D, MD, md, md_dsl, d)
 );
-pub trait LVal<T> : Clone{
-    fn to_lvalue_string(&self) -> String;
+impl_shader_lift!(
+    ShaderLift5,
+    (A, MA, ma, ma_dsl, a),
+    (B, MB, mb, mb_dsl, b),
+    (C, MC, mc, mc_dsl, c),
+    (D, MD, md, md_dsl, d),
+    (E, ME, me, me_dsl, e)
+);
+
+impl_shader_lift!(
+    ShaderLift6,
+    (A, MA, ma, ma_dsl, a),
+    (B, MB, mb, mb_dsl, b),
+    (C, MC, mc, mc_dsl, c),
+    (D, MD, md, md_dsl, d),
+    (E, ME, me, me_dsl, e),
+    (F, MF, mf, mf_dsl, f)
+);
+
+impl_shader_lift!(
+    ShaderLift7,
+    (A, MA, ma, ma_dsl, a),
+    (B, MB, mb, mb_dsl, b),
+    (C, MC, mc, mc_dsl, c),
+    (D, MD, md, md_dsl, d),
+    (E, ME, me, me_dsl, e),
+    (F, MF, mf, mf_dsl, f),
+    (G, MG, mg, mg_dsl, g)
+);
+
+impl_shader_lift!(
+    ShaderLift8,
+    (A, MA, ma, ma_dsl, a),
+    (B, MB, mb, mb_dsl, b),
+    (C, MC, mc, mc_dsl, c),
+    (D, MD, md, md_dsl, d),
+    (E, ME, me, me_dsl, e),
+    (F, MF, mf, mf_dsl, f),
+    (G, MG, mg, mg_dsl, g),
+    (H, MH, mh, mh_dsl, h)
+);
+
+impl_shader_lift!(
+    ShaderLift9,
+    (A, MA, ma, ma_dsl, a),
+    (B, MB, mb, mb_dsl, b),
+    (C, MC, mc, mc_dsl, c),
+    (D, MD, md, md_dsl, d),
+    (E, ME, me, me_dsl, e),
+    (F, MF, mf, mf_dsl, f),
+    (G, MG, mg, mg_dsl, g),
+    (H, MH, mh, mh_dsl, h),
+    (I, MI, mi, mi_dsl, i)
+);
+
+impl_shader_lift!(
+    ShaderLift10,
+    (A, MA, ma, ma_dsl, a),
+    (B, MB, mb, mb_dsl, b),
+    (C, MC, mc, mc_dsl, c),
+    (D, MD, md, md_dsl, d),
+    (E, ME, me, me_dsl, e),
+    (F, MF, mf, mf_dsl, f),
+    (G, MG, mg, mg_dsl, g),
+    (H, MH, mh, mh_dsl, h),
+    (I, MI, mi, mi_dsl, i),
+    (J, MJ, mj, mj_dsl, j)
+);
+pub trait LVal<'a, T> : Clone{
+    fn to_lvalue_string(&self) -> ShaderDSL<'a, String>;
 }
 
-impl<T> LVal<T> for Var<T> {
-    fn to_lvalue_string(&self) -> String {
-        self.to_string()
+impl<'a, T> LVal<'a, T> for Var<T> {
+    fn to_lvalue_string(&self) -> ShaderDSL<'a, String> {
+        Free::Pure(self.to_string())
     }
 }
 
-impl<Base, T : Clone> LVal<T> for TypedAccessExpr<Var<Base>, T> {
-    fn to_lvalue_string(&self) -> String {
-        self.to_string()
+impl<'a, Base, T : Clone> LVal<'a, T> for TypedAccessExpr<Var<Base>, T> {
+    fn to_lvalue_string(&self) -> ShaderDSL<'a, String> {
+        Free::Pure(self.to_string())
     }
 }
 
-pub fn set<'a, T : 'a, T1 : 'a + LVal<T>>(v : T1, expr : impl Into<ShaderDSL<'a, Var<T>>>) -> ShaderDSL<'a, ()>{
+impl<'a, Base, T : Clone> LVal<'a, T> for ShaderDSL<'a, TypedAccessExpr<Var<Base>, T>> {
+    fn to_lvalue_string(&self) -> ShaderDSL<'a, String> {
+        mdo!{
+            v <- self.clone();
+            Free::Pure(v.to_string())
+        }
+    }
+}
+
+pub fn set<'a, T : 'a, T1 : 'a + LVal<'a, T>>(v : T1, expr : impl Into<ShaderDSL<'a, Var<T>>>) -> ShaderDSL<'a, ()>{
     mdo!{
         v1 <- expr.into();
-        _set_statement_reassign(v.to_lvalue_string(), v1.to_string());
+        s <- v.to_lvalue_string();
+        _set_statement_reassign(s, v1.to_string());
     }
 }
 
@@ -348,4 +520,24 @@ impl<'a, T> ForDSL<'a, i32> for Range<T>
             _end_scope()
         }
     }
+}
+
+macro_rules! constant_from {
+    ($t:ident) => {
+        paste! {
+            impl Var<$t> {
+                pub fn [<make_ $t>]<'a>(v: $t) -> ShaderDSL<'a, Var<$t>> {
+                    v.into() 
+                }
+            }
+        }
+    };
+}
+
+constant_from!(i32);
+constant_from!(f32);
+constant_from!(u32);
+
+pub fn return_<'a>() -> ShaderDSL<'a, ()>{
+   _return_statement("")
 }
