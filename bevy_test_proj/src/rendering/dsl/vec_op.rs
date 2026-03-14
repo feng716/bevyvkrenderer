@@ -10,7 +10,7 @@ use crate::{
     rendering::dsl::{
         monad::Free,
         shader_dsl::{
-            FuncArg, FuncName, IntoShaderVar, ShaderDSL, _call_func_rt, _new_ident, _set_statement,
+            FuncArg, FuncName, IntoShaderVar, ShaderDSL, _call_func_rt, _new_ident, _set_statement_let,
         },
     },
 };
@@ -123,6 +123,8 @@ pub struct Vec2<T>(PhantomData<T>);
 pub struct Array1D<T>(PhantomData<T>);
 #[derive(Clone, Copy)]
 struct Array2D<T>(PhantomData<T>);
+#[derive(Clone, Copy)]
+pub struct Mat4x4<T>(PhantomData<T>);
 macro_rules! typed_expr_swizzle {
     ($name:ident, $ret:ident) => {
         pub fn $name(self) -> TypedAccessExpr<BaseVar, $ret<T>> {
@@ -366,7 +368,7 @@ impl<'a, T: 'a, CurrentT: Clone> From<TypedAccessExpr<Var<T>, CurrentT>>
     fn from(val: TypedAccessExpr<Var<T>, CurrentT>) -> Self {
         mdo! {
             new_ident <- _new_ident();
-            _set_statement(new_ident.to_string(), val.to_string());
+            _set_statement_let(new_ident.to_string(), val.to_string());
             Free::Pure(new_ident)
         }
     }
@@ -459,6 +461,7 @@ macro_rules! impl_math_ops {
     };
 }
 impl_math_ops!(Add, add, Add, f32);
+impl_math_ops!(Add, add, Add, i32);
 impl_math_ops!(Add, add, Add, Vec2<f32>);
 impl_math_ops!(Add, add, Add, Vec3<f32>);
 impl_math_ops!(Add, add, Add, Vec4<f32>);
@@ -655,3 +658,181 @@ macro_rules! make_float4 {
         make_float4_impl(( $($arg.in_context(),)* ))
     };
 }
+trait IntoFloat3<'a> {
+    fn into_float3(self) -> ShaderDSL<'a, Var<Vec3<f32>>>;
+}
+impl<'a> IntoFloat3<'a> for (ShaderDSL<'a, Var<f32>>, ShaderDSL<'a, Var<f32>>, ShaderDSL<'a, Var<f32>>) {
+    fn into_float3(self) -> ShaderDSL<'a, Var<Vec3<f32>>> {
+        make_vecf_op!(FuncName::MakeFloat3, self.0, self.1, self.2)
+    }
+}
+impl<'a> IntoFloat3<'a> for (ShaderDSL<'a, Var<Vec2<f32>>>, ShaderDSL<'a, Var<f32>>) {
+    fn into_float3(self) -> ShaderDSL<'a, Var<Vec3<f32>>> {
+        make_vecf_op!(FuncName::MakeFloat3, self.0, self.1)
+    }
+}
+impl<'a> IntoFloat3<'a> for (ShaderDSL<'a, Var<f32>>, ShaderDSL<'a, Var<Vec2<f32>>>) {
+    fn into_float3(self) -> ShaderDSL<'a, Var<Vec3<f32>>> {
+        make_vecf_op!(FuncName::MakeFloat3, self.0, self.1)
+    }
+}
+impl<'a> IntoFloat3<'a> for (ShaderDSL<'a, Var<f32>>,) {
+    fn into_float3(self) -> ShaderDSL<'a, Var<Vec3<f32>>> {
+        make_vecf_op!(FuncName::MakeFloat3, self.0)
+    }
+}
+impl<'a> IntoFloat3<'a> for (ShaderDSL<'a, Var<Vec3<f32>>>,) {
+    fn into_float3(self) -> ShaderDSL<'a, Var<Vec3<f32>>> {
+        make_vecf_op!(FuncName::MakeFloat3, self.0)
+    }
+}
+
+pub fn make_float3_impl<'a, T: IntoFloat3<'a>>(v: T) -> ShaderDSL<'a, Var<Vec3<f32>>> {
+    v.into_float3()
+}
+
+#[macro_export]
+macro_rules! make_float3 {
+    ($($arg:expr),* $(,)?) => {
+        make_float3_impl(( $($arg.in_context(),)* ))
+    };
+}
+trait IntoFloat2<'a> {
+    fn into_float2(self) -> ShaderDSL<'a, Var<Vec2<f32>>>;
+}
+impl<'a> IntoFloat2<'a> for (ShaderDSL<'a, Var<f32>>, ShaderDSL<'a, Var<f32>>) {
+    fn into_float2(self) -> ShaderDSL<'a, Var<Vec2<f32>>> {
+        make_vecf_op!(FuncName::MakeFloat2, self.0, self.1)
+    }
+}
+impl<'a> IntoFloat2<'a> for (ShaderDSL<'a, Var<f32>>,) {
+    fn into_float2(self) -> ShaderDSL<'a, Var<Vec2<f32>>> {
+        make_vecf_op!(FuncName::MakeFloat2, self.0)
+    }
+}
+impl<'a> IntoFloat2<'a> for (ShaderDSL<'a, Var<Vec2<f32>>>,) {
+    fn into_float2(self) -> ShaderDSL<'a, Var<Vec2<f32>>> {
+        make_vecf_op!(FuncName::MakeFloat2, self.0)
+    }
+}
+
+pub fn make_float2_impl<'a, T: IntoFloat2<'a>>(v: T) -> ShaderDSL<'a, Var<Vec2<f32>>> {
+    v.into_float2()
+}
+
+#[macro_export]
+macro_rules! make_float2 {
+    ($($arg:expr),* $(,)?) => {
+        make_float2_impl(( $($arg.in_context(),)* ))
+    };
+}
+
+fn dsl_mixed_binary_op<'a, A, B, L : 'a, R : 'a, Out>(op: FuncName, a: A, b: B) -> ShaderDSL<'a, Var<Out>>
+where
+    A: Into<ShaderDSL<'a, Var<L>>>,
+    B: Into<ShaderDSL<'a, Var<R>>>,
+    Var<L>: Into<FuncArg>,
+    Var<R>: Into<FuncArg>,
+{
+    let a_dsl = Arc::new(a.into());
+    let b_dsl = Arc::new(b.into());
+    let op = Arc::new(op);
+
+    _mdo_move! {
+        [a_dsl, b_dsl, op]
+        ident <- _new_ident();
+        v1 <- (*a_dsl).clone();
+        v2 <- (*b_dsl).clone();
+        _call_func_rt(
+            (*op).clone(),
+            vec![v1.into(), v2.into()],
+            ident
+        )
+    }
+}
+
+macro_rules! impl_mixed_math_ops {
+    ($trait:ident, $method:ident, $func_name:ident, $vec_type:ident, $scalar_type:ident) => {
+        // --------------------------------------------------------
+        // VEC OP SCALAR -> VEC
+        // --------------------------------------------------------
+        
+        // 1. ShaderDSL<Vec> + ShaderDSL<Scalar>
+        impl<'a> $trait<ShaderDSL<'a, Var<$scalar_type>>> for ShaderDSL<'a, Var<$vec_type<f32>>> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$scalar_type>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+            }
+        }
+
+        // 2. ShaderDSL<Vec> + Var<Scalar>
+        impl<'a> $trait<Var<$scalar_type>> for ShaderDSL<'a, Var<$vec_type<f32>>> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: Var<$scalar_type>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+            }
+        }
+        
+        // 3. Var<Vec> + ShaderDSL<Scalar>
+        impl<'a> $trait<ShaderDSL<'a, Var<$scalar_type>>> for Var<$vec_type<f32>> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$scalar_type>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+            }
+        }
+
+        // 4. TypedAccessExpr<Vec> + ShaderDSL<Scalar>
+        impl<'a, B: 'a> $trait<ShaderDSL<'a, Var<$scalar_type>>> for TypedAccessExpr<Var<B>, $vec_type<f32>> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$scalar_type>>) -> Self::Output {
+                let lhs_dsl: ShaderDSL<'a, Var<$vec_type<f32>>> = self.into();
+                dsl_mixed_binary_op(FuncName::$func_name, lhs_dsl, rhs)
+            }
+        }
+
+        // --------------------------------------------------------
+        // SCALAR OP VEC -> VEC
+        // --------------------------------------------------------
+
+        // 5. ShaderDSL<Scalar> + ShaderDSL<Vec>
+        impl<'a> $trait<ShaderDSL<'a, Var<$vec_type<f32>>>> for ShaderDSL<'a, Var<$scalar_type>> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$vec_type<f32>>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+            }
+        }
+
+        // 6. ShaderDSL<Scalar> + Var<Vec>
+        impl<'a> $trait<Var<$vec_type<f32>>> for ShaderDSL<'a, Var<$scalar_type>> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: Var<$vec_type<f32>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+            }
+        }
+
+        // 7. Var<Scalar> + ShaderDSL<Vec>
+        impl<'a> $trait<ShaderDSL<'a, Var<$vec_type<f32>>>> for Var<$scalar_type> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$vec_type<f32>>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::$func_name, self, rhs)
+            }
+        }
+
+        // 8. TypedAccessExpr<Scalar> + ShaderDSL<Vec>
+        impl<'a, B: 'a> $trait<ShaderDSL<'a, Var<$vec_type<f32>>>> for TypedAccessExpr<Var<B>, $scalar_type> {
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$vec_type<f32>>>) -> Self::Output {
+                let lhs_dsl: ShaderDSL<'a, Var<$scalar_type>> = self.into();
+                dsl_mixed_binary_op(FuncName::$func_name, lhs_dsl, rhs)
+            }
+        }
+    };
+}
+
+impl_mixed_math_ops!(Mul, mul, Mul, Vec2, f32);
+impl_mixed_math_ops!(Mul, mul, Mul, Vec3, f32);
+impl_mixed_math_ops!(Mul, mul, Mul, Vec4, f32);
+
+impl_mixed_math_ops!(Div, div, Div, Vec2, f32);
+impl_mixed_math_ops!(Div, div, Div, Vec3, f32);
+impl_mixed_math_ops!(Div, div, Div, Vec4, f32);

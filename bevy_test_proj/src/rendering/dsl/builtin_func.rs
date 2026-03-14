@@ -1,12 +1,11 @@
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use crate::{
-    _mdo_move,
-    rendering::dsl::{
-        monad::OwnedMonad,
-        shader_dsl::{FuncArg, FuncName, ShaderDSL, Var, _call_func_rt, _new_ident},
-        vec_op::Vec3,
-    },
+    _mdo_move, mdo, rendering::dsl::{
+        monad::{ Free, OwnedMonad},
+        shader_dsl::{_begin_scope, _break_statement, _call_func, _call_func_rt, _continue_statement, _continuing_statement, _end_scope, _if_statement, _loop_statement, _new_ident, _set_statement_reassign, FuncArg, FuncName, IntoShaderVar, ShaderDSL, Var, while_},
+        vec_op::{TypedAccessExpr, Vec3},
+    }
 };
 
 fn dsl_cmp_op<'a, A, B, T: 'a>(op: FuncName, a: A, b: B) -> ShaderDSL<'a, Var<bool>>
@@ -255,3 +254,98 @@ impl_shader_lift!(
     (C, MC, mc, mc_dsl, c),
     (D, MD, md, md_dsl, d)
 );
+pub trait LVal<T> : Clone{
+    fn to_lvalue_string(&self) -> String;
+}
+
+impl<T> LVal<T> for Var<T> {
+    fn to_lvalue_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl<Base, T : Clone> LVal<T> for TypedAccessExpr<Var<Base>, T> {
+    fn to_lvalue_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+pub fn set<'a, T : 'a, T1 : 'a + LVal<T>>(v : T1, expr : impl Into<ShaderDSL<'a, Var<T>>>) -> ShaderDSL<'a, ()>{
+    mdo!{
+        v1 <- expr.into();
+        _set_statement_reassign(v.to_lvalue_string(), v1.to_string());
+    }
+}
+
+pub trait ForM<'a, Item> {
+    fn forM_<F>(self, f: F) -> ShaderDSL<'a, ()>
+    where
+        F: 'a + Fn(Item) -> ShaderDSL<'a, ()> + Clone;
+}
+
+impl<'a, I, Item> ForM<'a, Item> for I
+where
+    I: Iterator<Item = Item>,
+{
+    fn forM_<F>(self, f: F) -> ShaderDSL<'a, ()>
+    where
+        F: 'a + Fn(Item) -> ShaderDSL<'a, ()> + Clone,
+    {
+        self.fold(Free::Pure(()), |acc, item| {
+            let step = f(item);
+            _mdo_move! {
+                acc;
+                step.clone()
+            }
+        })
+    }
+}
+
+pub trait ForDSL<'a, T> {
+    fn for_<Body>(self, body: Body) -> ShaderDSL<'a, ()>
+    where
+        Body: 'a + Fn(Var<T>, (fn() -> ShaderDSL<'a, ()>, fn() -> ShaderDSL<'a, ()>)) -> ShaderDSL<'a, ()>;
+}
+
+impl<'a, T> ForDSL<'a, i32> for Range<T>
+    where T : Into<ShaderDSL<'a, Var<i32>>>
+{
+    fn for_<Body>(self, body: Body) -> ShaderDSL<'a, ()>
+    where
+        Body: 'a + Fn(Var<i32>, (fn() -> ShaderDSL<'a, ()>, fn() -> ShaderDSL<'a, ()>)) -> ShaderDSL<'a, ()>,
+    {
+        let start = self.start.into();
+        let end = Arc::new(self.end.into());
+        
+        let body_arc = Arc::new(body);
+
+        _mdo_move! {
+            [body_arc, end]
+            
+            i <- start + 0;
+            cond <- i.lt((*end).clone());
+            _loop_statement();
+            _begin_scope();
+
+            not_cond <- !cond.in_context();
+            _if_statement(not_cond);
+            _begin_scope();
+            _call_func(FuncName::Break, vec![]);
+            _end_scope();
+
+            _tmp <- (*body_arc)(i, (_break_statement, _continue_statement));
+
+            _continuing_statement();
+            _begin_scope();
+
+            next_i <- i.in_context() + 1;
+            set(i, next_i);
+
+            next_cond <- i.lt((*end).clone());
+            set(cond, next_cond);
+
+            _end_scope(); 
+            _end_scope()
+        }
+    }
+}

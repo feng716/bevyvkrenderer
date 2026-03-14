@@ -1,14 +1,15 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::rendering::dsl::builtin_func::{dot, length, ShaderCmp, ShaderLift2};
+use crate::rendering::dsl::builtin_func::{ForDSL, ForM, ShaderCmp, ShaderLift2, dot, length, set};
+use crate::rendering::dsl::cast::ShaderCast;
 use crate::{make_float4, mdo};
 
 use super::monad::{lift_f, CloneWrapped, Free, OwnedApplicative, OwnedFunctor, OwnedMonad};
 use super::vec_op::{make_float4_impl, Vec2, Vec3, Vec4};
 
 pub struct Var<T> {
-    ident: i32,
-    _marker: PhantomData<T>,
+    pub(crate) ident: i32,
+    pub(crate) _marker: PhantomData<T>,
 }
 impl<T> Clone for Var<T> {
     fn clone(&self) -> Self {
@@ -31,9 +32,11 @@ pub(super) enum ShaderDSLF<'a, T> {
     EndScope(T),
     If(Var<bool>, T),
     Else(T),
-    While(Var<bool>, T),
+    Loop(T),
+    Continuing(T),
     Set(String, T),
     Call(Option<String>, FuncName, Vec<FuncArg>, T),
+    Return(String, T)
 }
 #[derive(Clone)]
 pub(super) enum FuncName {
@@ -66,8 +69,11 @@ pub(super) enum FuncName {
     Clamp,
     Reflect,
     Refract,
-    MakeFloat3, // <-- Add this
-    MakeFloat2, // <-- Add this
+    MakeFloat3,
+    MakeFloat2,
+    Break,
+    Continue,
+    Cast(&'static str),
 }
 #[derive(Clone, shader_macros::DisplayInner)]
 pub(super) enum FuncArg {
@@ -125,11 +131,11 @@ where
             Self::EndScope(arg0) => Self::EndScope(arg0.clone()),
             Self::If(arg0, arg1) => Self::If(arg0.clone(), arg1.clone()),
             Self::Else(arg0) => Self::Else(arg0.clone()),
-            Self::While(arg0, arg1) => Self::While(arg0.clone(), arg1.clone()),
+            Self::Loop(arg0) => Self::Loop(arg0.clone()),
+            Self::Continuing(arg0) => Self::Continuing(arg0.clone()),
             Self::Set(arg0, arg1) => Self::Set(arg0.clone(), arg1.clone()),
-            Self::Call(arg0, arg1, arg2, arg3) => {
-                Self::Call(arg0.clone(), arg1.clone(), arg2.clone(), arg3.clone())
-            }
+            Self::Call(arg0, arg1, arg2, arg3) => Self::Call(arg0.clone(), arg1.clone(), arg2.clone(), arg3.clone()),
+            Self::Return(arg0, arg1) => Self::Return(arg0.clone(), arg1.clone()),
         }
     }
 }
@@ -156,11 +162,13 @@ where
             ShaderDSLF::EndScope(t) => ShaderDSLF::EndScope(f(t)),
             ShaderDSLF::If(var, t) => ShaderDSLF::If(var, f(t)),
             ShaderDSLF::Else(t) => ShaderDSLF::Else(f(t)),
-            ShaderDSLF::While(var, t) => ShaderDSLF::While(var, f(t)),
+            ShaderDSLF::Loop(t) => ShaderDSLF::Loop(f(t)),
             ShaderDSLF::Set(var, t) => ShaderDSLF::Set(var, f(t)),
             ShaderDSLF::Call(rt, func_name, func_args, t) => {
                 ShaderDSLF::Call(rt, func_name, func_args, f(t))
             }
+            ShaderDSLF::Continuing(t) => ShaderDSLF::Continuing(f(t)),
+            ShaderDSLF::Return(s, t) => ShaderDSLF::Return(s, f(t)),
         }
     }
 
@@ -229,6 +237,9 @@ pub(super) fn _if_statement<'a>(cond: Var<bool>) -> ShaderDSL<'a, ()> {
 pub(super) fn _else_statement<'a>() -> ShaderDSL<'a, ()> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Else(()))
 }
+pub(super) fn _continuing_statement<'a>() -> ShaderDSL<'a, ()> {
+    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Continuing(()))
+}
 pub(super) fn _call_func_rt<'a, T: Clone + ToString>(
     f: FuncName,
     args: Vec<FuncArg>,
@@ -239,10 +250,25 @@ pub(super) fn _call_func_rt<'a, T: Clone + ToString>(
 pub(super) fn _call_func<'a>(f: FuncName, args: Vec<FuncArg>) -> ShaderDSL<'a, ()> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Call(None, f, args, ()))
 }
-pub(super) fn _set_statement<'a>(v: String, assigned: String) -> ShaderDSL<'a, ()> {
+pub(super) fn _set_statement_let<'a>(v: String, assigned: String) -> ShaderDSL<'a, ()> {
+    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Set(format!("let {} = {}", v, assigned), ()))
+}
+pub(super) fn _set_statement_reassign<'a>(v: String, assigned: String) -> ShaderDSL<'a, ()> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Set(format!("{} = {}", v, assigned), ()))
 }
+pub(super) fn _loop_statement<'a>() -> ShaderDSL<'a, ()> {
+    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Loop(()))
+}
+pub(super) fn _return_statement<'a, T : ToString>(a : T) -> ShaderDSL<'a, ()> {
+    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Return(a.to_string(), ()))
+}
+pub(super) fn _break_statement<'a>() -> ShaderDSL<'a, ()> {
+    _call_func(FuncName::Break, vec![])
+}
 
+pub(super) fn _continue_statement<'a>() -> ShaderDSL<'a, ()> {
+    _call_func(FuncName::Continue, vec![])
+}
 #[derive(Clone)]
 struct IfBuilder<'a, T: Clone> {
     condition: ShaderDSL<'a, Var<bool>>,
@@ -311,6 +337,7 @@ impl<'a, T: Clone> IfBuilder<'a, T> {
     }
     pub fn bind<F>(self, f: F) -> ShaderDSL<'a, ()>
     where
+        T: Copy,
         F: 'a + Fn(T) -> ShaderDSL<'a, ()> + Clone,
     {
         let s = Arc::new(self.true_branch);
@@ -320,10 +347,49 @@ impl<'a, T: Clone> IfBuilder<'a, T> {
             _if_statement(v);
             _begin_scope();
             x <- (*s).clone();
-            f(x);
             _end_scope();
-            ShaderDSL::pure(())
+            f(x)
         }
+    }
+}
+
+
+
+pub fn while_<'a, Cond, Body>(
+    cond_fn: Cond,
+    body: Body,
+) -> ShaderDSL<'a, ()>
+where
+    Cond: 'a + Fn() -> ShaderDSL<'a, Var<bool>>,
+    Body: 'a + Fn((fn() -> ShaderDSL<'a, ()>, fn() -> ShaderDSL<'a, ()>)) -> ShaderDSL<'a, ()>
+{
+    let cond_fn_arc = Arc::new(cond_fn);
+    let body_arc = Arc::new(body((_break_statement, _continue_statement)));
+
+    _mdo_move! {
+        [cond_fn_arc, body_arc]
+        
+        initial_cond <- (*cond_fn_arc)();
+        
+        _loop_statement();
+        _begin_scope();
+        
+        v <- !initial_cond.in_context();
+        _if_statement(v);
+        _begin_scope();
+        _break_statement();
+        _end_scope();
+        
+        _tmp <- (*body_arc).clone();
+        
+        _continuing_statement();
+        _begin_scope();
+        
+        next_cond <- (*cond_fn_arc)();
+        set(initial_cond, next_cond);
+        
+        _end_scope(); 
+        _end_scope()
     }
 }
 
@@ -340,8 +406,8 @@ fn _build_shader<'a, T>(v: ShaderDSL<'a, T>, str: String, ident: i32) -> String 
                 ident,
             ),
             ShaderDSLF::Else(next_prog) => _build_shader(next_prog, str + "\nelse", ident),
-            ShaderDSLF::While(var, t) => {
-                _build_shader(t, str + format!("\nwhile(v{})", var.ident).as_str(), ident)
+            ShaderDSLF::Loop(t) => {
+                _build_shader(t, str + "\nloop", ident)
             }
             ShaderDSLF::Set(s, t) => _build_shader(t, str + format!("\n{};", s).as_str(), ident),
             ShaderDSLF::Call(rt, func_name, func_args, t) => {
@@ -379,18 +445,23 @@ fn _build_shader<'a, T>(v: ShaderDSL<'a, T>, str: String, ident: i32) -> String 
                     FuncName::Mix => format!("mix({}, {}, {})", v[0], v[1], v[2]),
                     FuncName::Clamp => format!("clamp({}, {}, {})", v[0], v[1], v[2]),
                     FuncName::Refract => format!("refract({}, {}, {})", v[0], v[1], v[2]),
+                    FuncName::Break => "break".to_string(),
+                    FuncName::Continue => "continue".to_string(),
+                    FuncName::Cast(t) => format!("{}({})", t, v[0]),
                 };
                 _build_shader(
                     t,
                     format!(
                         "{}\n{}{};",
                         str,
-                        rt.map_or(String::from(""), |v| format!("{} = ", v)),
+                        rt.map_or(String::from(""), |v| format!("let {} = ", v)),
                         call_fn(func_name)
                     ),
                     ident,
                 )
             }
+            ShaderDSLF::Continuing(t) => _build_shader(t, str + "\ncontinuing", ident),
+            ShaderDSLF::Return(s, t) => todo!(),
         },
     }
 }
@@ -404,7 +475,7 @@ impl<'a> From<i32> for ShaderDSL<'a, Var<i32>> {
     fn from(value: i32) -> Self {
         mdo! {
             val <- _new_ident();
-            _set_statement(val.to_string(), value.to_string());
+            _set_statement_let(val.to_string(), value.to_string());
             Free::Pure(val)
         }
     }
@@ -413,7 +484,7 @@ impl<'a> From<f32> for ShaderDSL<'a, Var<f32>> {
     fn from(value: f32) -> Self {
         mdo! {
             val <- _new_ident();
-            _set_statement(val.to_string(), value.to_string());
+            _set_statement_let(val.to_string(), format!("{}f", value.to_string()));
             Free::Pure(val)
         }
     }
@@ -422,7 +493,7 @@ impl<'a> From<bool> for ShaderDSL<'a, Var<bool>> {
     fn from(value: bool) -> Self {
         mdo! {
             val <- _new_ident();
-            _set_statement(val.to_string(), value.to_string());
+            _set_statement_let(val.to_string(), value.to_string());
             Free::Pure(val)
         }
     }
@@ -469,7 +540,19 @@ fn test_dsl() {
             val5 <- make_float4!(val2.xy(), _a.xy());
         });
         val6 <- dot(val2, val3);
+        set(val2.x(), val2.x());
+        (1..=3).forM_(|i|mdo!{
+            val <- make_float4!(i as f32);
+        });
+        while_(move||val2.x().lt(val2.y()), |(break_, _)|mdo!{
+            val <- make_float4!(1.);
+            break_();
+        });
+        (1..2).for_(|i, _| mdo!{
+            val <- make_float4!(i.cast::<f32>());
+        });
+        
         val5 <- length(val2);
     };
-    println!("{}", _build_shader(program, String::from(""), 0));
+    // println!("{}", _build_shader(program, String::from(""), 0));
 }
