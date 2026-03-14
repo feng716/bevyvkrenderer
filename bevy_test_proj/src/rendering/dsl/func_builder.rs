@@ -482,6 +482,14 @@ impl<State, Uniforms> ShaderCode<State, Uniforms> {
             },
         }
     }
+    pub fn add_struct<T: ShaderStruct>(mut self) -> Self {
+        let decl = T::wgsl_struct_decl();
+        
+        self.structs.push_str(&decl);
+        self.structs.push('\n');
+        
+        self
+    }
 }
 impl<Uniforms> ShaderCode<EmptyShader, Uniforms> {
     pub fn build_pipeline<F, FinalState>(self, builder_closure: F) -> String
@@ -502,7 +510,7 @@ impl<Uniforms> ShaderCode<EmptyShader, Uniforms> {
 
         format!(
             "{}\n{}\n{}\n{}",
-            final_builder.ext_functions.iter().map(|(_, x)|(**x).clone()).collect::<Vec<_>>().join("\n"), final_builder.structs, final_builder.globals, final_builder.functions
+            final_builder.structs, final_builder.ext_functions.iter().map(|(_, x)|(**x).clone()).collect::<Vec<_>>().join("\n"), final_builder.globals, final_builder.functions
         )
     }
 }

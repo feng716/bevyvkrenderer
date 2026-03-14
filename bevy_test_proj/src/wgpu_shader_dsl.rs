@@ -4,9 +4,16 @@ use std::thread;
 use rendering::dsl::*;
 use shader_macros::ShaderStruct;
 use crate::rendering::dsl::{ FuncName, FuncArg };
+use std::{collections::HashSet, sync::Arc, time::Instant};
+use winit::{
+    event::*,
+    event_loop::EventLoop,
+    keyboard::{KeyCode, PhysicalKey},
+    window::WindowBuilder,
+};
 
 #[derive(ShaderStruct, Clone)]
-pub struct Camera {
+pub struct CameraShader {
     pub pos: Vec3<f32>,
     pub front: Vec3<f32>,
     pub up: Vec3<f32>,
@@ -35,9 +42,13 @@ pub struct Onb {
     pub binormal: Var<Vec3<f32>>,
     pub normal: Var<Vec3<f32>>,
 }
-fn run(){
+fn gen_shader() -> String{
     let tea = define_fn("tea", |v0_in: Var<u32>, v1_in: Var<u32>| mdo! {
-        v0 <- v0_in.in_context(); v1 <- v1_in.in_context(); s0 <- Var::make_u32(0u32);
+        v0 <- Var::make_u32(0u32);
+        v1 <- Var::make_u32(0u32);
+        set(v0, v0_in);
+        set(v1, v1_in);
+        s0 <- Var::make_u32(0u32);
         (0..4).for_(move |_n, _| mdo! {
             set(s0, s0.in_context() + 0x9e3779b9u32);
             set(v0, v0 + (((v1.in_context() << 4u32) + 0xa341316cu32) ^ (v1 + s0.in_context()) ^ ((v1.in_context() >> 5u32) + 0xc8013ea4u32)));
@@ -191,8 +202,10 @@ fn run(){
     let get_material = &get_material;
     struct CameraVar;
     struct AccumBufferVar;
-    let final_wgsl = ShaderCode::new()
-        .uniform::<CameraVar, Camera>(0, 0)
+    ShaderCode::new()
+        .uniform::<CameraVar, CameraShader>(0, 0)
+        .add_struct::<Ray>()
+        .add_struct::<Hit>()
         .storage::<AccumBufferVar, Vec4<f32>, Array1D<Vec4<f32>>, ReadWrite>(0, 1)
         .build_pipeline(|builder, globals| {
             
@@ -349,16 +362,225 @@ fn run(){
                 v <- make_float4!(mapped, 1.0f32);
                 Free::Pure(Location::<0, _>::new(v))
             })
-        });
-    
+        })
 }
-const STACK_SIZE: usize = 4 * 1024 * 1024;
-fn main(){
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniform {
+    pos: [f32; 3], _p1: u32,
+    front: [f32; 3], _p2: u32,
+    up: [f32; 3], _p3: u32,
+    right: [f32; 3], fov: f32,
+    res: [f32; 2], frame: u32, _p4: u32,
+}
+
+struct Camera {
+    pos: glam::Vec3,
+    front: glam::Vec3,
+    up: glam::Vec3,
+    right: glam::Vec3,
+    fov: f32,
+}
+
+async fn run() {
+    let event_loop = EventLoop::new().unwrap();
+    let window = Arc::new(WindowBuilder::new()
+        .with_title("Compute Shader Path Tracer")
+        .with_inner_size(winit::dpi::LogicalSize::new(1024, 1024))
+        .build(&event_loop)
+        .unwrap());
+
+    let instance = wgpu::Instance::default();
+    let surface = instance.create_surface(window.clone()).unwrap();
+    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
+    let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default(), None).await.unwrap();
+
+    let mut config = surface.get_default_config(&adapter, window.inner_size().width, window.inner_size().height).unwrap();
+    surface.configure(&device, &config);
+
     let child = thread::Builder::new()
         .stack_size(STACK_SIZE)
-        .spawn(run)
+        .spawn(gen_shader)
         .unwrap();
 
-    // Wait for thread to join
-    child.join().unwrap();
+    let s = child.join().unwrap();
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None, source: wgpu::ShaderSource::Wgsl(s.into()),
+    });
+
+    let mut camera = Camera {
+        pos: glam::vec3(-0.01, 0.995, 5.0),
+        front: glam::vec3(0.0, 0.0, -1.0),
+        up: glam::vec3(0.0, 1.0, 0.0),
+        right: glam::vec3(1.0, 0.0, 0.0),
+        fov: 27.8,
+    };
+
+    let mut frame_count = 0u32;
+    let mut uniform = CameraUniform {
+        pos: camera.pos.into(), _p1: 0,
+        front: camera.front.into(), _p2: 0,
+        up: camera.up.into(), _p3: 0,
+        right: camera.right.into(), fov: camera.fov,
+        res: [config.width as f32, config.height as f32], frame: 0, _p4: 0,
+    };
+
+    let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Camera Buffer"),
+        size: std::mem::size_of::<CameraUniform>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let create_accum_buffer = |device: &wgpu::Device, w: u32, h: u32| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Accum Buffer"),
+            size: (w * h * 16) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        })
+    };
+    let mut accum_buffer = create_accum_buffer(&device, config.width, config.height);
+
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0, visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1, visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+        ],
+    });
+
+    let mut bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None, layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: accum_buffer.as_entire_binding() },
+        ],
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None, bind_group_layouts: &[&bind_group_layout], push_constant_ranges: &[],
+    });
+
+    let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Compute"), layout: Some(&pipeline_layout),
+        module: &shader, entry_point: "cs_main",
+    });
+
+    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Render"), layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &[] },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader, entry_point: "fs_main",
+            targets: &[Some(config.format.into())],
+        }),
+        primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+        depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None,
+    });
+
+    let mut keys = HashSet::new();
+    let mut last_time = Instant::now();
+
+    event_loop.run(move |event, elwt| {
+        match event {
+            Event::WindowEvent { event, .. } => match event {
+                WindowEvent::CloseRequested => elwt.exit(),
+                WindowEvent::KeyboardInput { event: KeyEvent { physical_key: PhysicalKey::Code(key), state, .. }, .. } => {
+                    if state == ElementState::Pressed { keys.insert(key); } else { keys.remove(&key); }
+                }
+                WindowEvent::Resized(size) => {
+                    config.width = size.width.max(1); config.height = size.height.max(1);
+                    surface.configure(&device, &config);
+                    
+                    // Add &device here as well
+                    accum_buffer = create_accum_buffer(&device, config.width, config.height);
+                    
+                    bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None, layout: &bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: accum_buffer.as_entire_binding() },
+                        ],
+                    });
+                    frame_count = 0;
+                }
+                WindowEvent::RedrawRequested => {
+                    let dt = last_time.elapsed().as_secs_f32();
+                    last_time = Instant::now();
+                    let mut is_dirty = false;
+                    let speed = 2.0 * dt;
+                    let rot_speed = 1.0 * dt;
+
+                    // Camera Controller
+                    if keys.contains(&KeyCode::KeyW) { camera.pos += camera.front * speed; is_dirty = true; }
+                    if keys.contains(&KeyCode::KeyS) { camera.pos -= camera.front * speed; is_dirty = true; }
+                    if keys.contains(&KeyCode::KeyA) { camera.pos -= camera.right * speed; is_dirty = true; }
+                    if keys.contains(&KeyCode::KeyD) { camera.pos += camera.right * speed; is_dirty = true; }
+                    if keys.contains(&KeyCode::Space) { camera.pos += camera.up * speed; is_dirty = true; }
+                    if keys.contains(&KeyCode::ShiftLeft) { camera.pos -= camera.up * speed; is_dirty = true; }
+                    
+                    if keys.contains(&KeyCode::ArrowLeft) {
+                        let rot = glam::Mat3::from_axis_angle(camera.up, rot_speed);
+                        camera.front = rot * camera.front; camera.right = rot * camera.right; is_dirty = true;
+                    }
+                    if keys.contains(&KeyCode::ArrowRight) {
+                        let rot = glam::Mat3::from_axis_angle(camera.up, -rot_speed);
+                        camera.front = rot * camera.front; camera.right = rot * camera.right; is_dirty = true;
+                    }
+
+                    if is_dirty { frame_count = 0; }
+
+                    uniform.pos = camera.pos.into();
+                    uniform.front = camera.front.into();
+                    uniform.up = camera.up.into();
+                    uniform.right = camera.right.into();
+                    uniform.res = [config.width as f32, config.height as f32];
+                    uniform.frame = frame_count;
+                    queue.write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniform));
+
+                    let output = surface.get_current_texture().unwrap();
+                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+                    { // Compute Pass
+                        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                        cpass.set_pipeline(&compute_pipeline);
+                        cpass.set_bind_group(0, &bind_group, &[]);
+                        cpass.dispatch_workgroups((config.width + 15) / 16, (config.height + 15) / 16, 1);
+                    }
+                    { // Presentation Pass
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: None, color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view, resolve_target: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                            })], depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+                        });
+                        rpass.set_pipeline(&render_pipeline);
+                        rpass.set_bind_group(0, &bind_group, &[]);
+                        rpass.draw(0..3, 0..1);
+                    }
+
+                    queue.submit(std::iter::once(encoder.finish()));
+                    output.present();
+                    frame_count += 1;
+                }
+                _ => {}
+            }
+            Event::AboutToWait => window.request_redraw(),
+            _ => {}
+        }
+    }).unwrap();
+}
+
+const STACK_SIZE: usize = 4 * 1024 * 1024;
+fn main(){
+    pollster::block_on(run());
 }

@@ -253,7 +253,7 @@ pub(super) fn _call_func<'a>(f: FuncName, args: Vec<FuncArg>) -> ShaderDSL<'a, (
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Call(None, f, args, ()))
 }
 pub(super) fn _set_statement_let<'a>(v: String, assigned: String) -> ShaderDSL<'a, ()> {
-    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Set(format!("let {} = {}", v, assigned), ()))
+    lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Set(format!("var {} = {}", v, assigned), ()))
 }
 pub(super) fn _set_statement_reassign<'a>(v: String, assigned: String) -> ShaderDSL<'a, ()> {
     lift_f::<'_, _, _, ShaderDSL<'_, _>>(ShaderDSLF::Set(format!("{} = {}", v, assigned), ()))
@@ -442,7 +442,7 @@ fn _build_shader<'a, T>(v: ShaderDSL<'a, T>, str: String, ident: i32) -> String 
                     format!(
                         "{}\n{}{};",
                         str,
-                        rt.map_or(String::from(""), |v| format!("let {} = ", v)),
+                        rt.map_or(String::from(""), |v| format!("var {} = ", v)),
                         call_fn(func_name)
                     ),
                     ident,
@@ -460,22 +460,22 @@ impl<'a, T> From<Var<T>> for ShaderDSL<'a, Var<T>> {
 }
 
 macro_rules! constant_from {
-    ($t:ty) => {
+    ($t:ty, $suf:expr) => {
         impl<'a> From<$t> for ShaderDSL<'a, Var<$t>> {
             fn from(value: $t) -> Self {
                 mdo! {
                     val <- _new_ident();
-                    _set_statement_let(val.to_string(), value.to_string());
+                    _set_statement_let(val.to_string(), format!("{}{}", value.to_string(), $suf));
                     Free::Pure(val)
                 }
             }
         }
     };
 }
-constant_from!(i32);
-constant_from!(u32);
-constant_from!(f32);
-constant_from!(bool);
+constant_from!(i32, "i");
+constant_from!(u32, "u");
+constant_from!(f32, "f");
+constant_from!(bool, "");
 
 pub trait IntoShaderVar<'a> {
     type InnerT;

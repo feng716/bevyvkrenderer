@@ -45,7 +45,7 @@ where
     Var<T>: Into<FuncArg>,
 {
     fn eq<B: Into<ShaderDSL<'a, Var<T>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
-        dsl_cmp_op(FuncName::BiOp("="), self, other)
+        dsl_cmp_op(FuncName::BiOp("=="), self, other)
     }
     fn neq<B: Into<ShaderDSL<'a, Var<T>>>>(self, other: B) -> ShaderDSL<'a, Var<bool>> {
         dsl_cmp_op(FuncName::BiOp("!="), self, other)
@@ -170,7 +170,7 @@ where
     A: Into<ShaderDSL<'a, Var<T>>>,
     Var<T>: Into<FuncArg>,
 {
-    dsl_builtin_1(FuncName::NormalFunctionInvoke("radian"), a)
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("radians"), a)
 }
 pub fn cos<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
 where
