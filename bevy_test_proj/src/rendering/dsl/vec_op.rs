@@ -37,7 +37,7 @@ fn access_to_string<T>(k: &VarAccessExpr<Var<T>>) -> String {
             var_access_expr.to_string(),
             decode_swizzle(*swizzle)
         ),
-        VarAccessExpr::MatrixAccessSwizzling(var_access_expr, _, _) => todo!(),
+        VarAccessExpr::MatrixAccessSwizzling(var_access_expr, x, y) => todo!(),
         VarAccessExpr::Var(v) => v.to_string(),
         VarAccessExpr::Array1DAccess(var_access_expr, i) => {
             format!("{}[{}]", var_access_expr.to_string(), i.to_string())
@@ -132,8 +132,6 @@ pub struct Vec2<T>(PhantomData<T>);
 pub struct Array1D<T>(PhantomData<T>);
 #[derive(Clone, Copy)]
 struct Array2D<T>(PhantomData<T>);
-#[derive(Clone, Copy)]
-pub struct Mat4x4<T>(PhantomData<T>);
 macro_rules! typed_expr_swizzle {
     ($name:ident, $ret:ident) => {
         pub fn $name(self) -> TypedAccessExpr<BaseVar, $ret<T>> {
@@ -604,12 +602,16 @@ impl_math_ops!(Add, add, "+", Vec4<f32>);
 impl_math_ops!(Sub, sub, "-", f32);
 impl_math_ops!(Sub, sub, "-", Vec2<f32>);
 impl_math_ops!(Sub, sub, "-", Vec3<f32>);
+impl_math_ops!(Sub, sub, "-", Vec4<f32>);
 impl_math_ops!(Mul, mul, "*", f32);
 impl_math_ops!(Mul, mul, "*", u32);
+impl_math_ops!(Mul, mul, "*", Vec2<f32>);
 impl_math_ops!(Mul, mul, "*", Vec3<f32>);
+impl_math_ops!(Mul, mul, "*", Vec4<f32>);
 impl_math_ops!(Div, div, "/", f32);
-impl_math_ops!(Div, div, "/", Vec3<f32>);
 impl_math_ops!(Div, div, "/", Vec2<f32>);
+impl_math_ops!(Div, div, "/", Vec3<f32>);
+impl_math_ops!(Div, div, "/", Vec4<f32>);
 impl_math_ops!(Rem, rem, "%", f32);
 impl_math_ops!(Rem, rem, "%", i32);
 impl_math_ops!(Rem, rem, "%", u32);
@@ -635,6 +637,7 @@ impl_one_side_math_ops!(Mul, mul, "*", u32);
 impl_one_side_math_ops!(Mul, mul, "*", f32);
 impl_one_side_math_ops!(Div, div, "/", f32);
 impl_one_side_math_ops!(Add, add, "+", u32);
+impl_one_side_math_ops!(Add, add, "+", f32);
 impl_one_side_math_ops!(Sub, sub, "-", f32);
 impl_one_side_math_ops!(Shl, shl, "<<", u32);
 impl_one_side_math_ops!(Shr, shr, ">>", u32);
@@ -912,6 +915,12 @@ where
 macro_rules! impl_mixed_math_ops {
     ($trait:ident, $method:ident, $func_name:expr, $vec_type:ident, $scalar_type:ident) => {
 
+        impl<'a> $trait<ShaderDSL<'a, Var<$vec_type<f32>>>> for $scalar_type{
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$vec_type<f32>>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
+            }
+        }
         impl<'a> $trait<$scalar_type> for ShaderDSL<'a, Var<$vec_type<f32>>> {
             type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
             fn $method(self, rhs: $scalar_type) -> Self::Output {
@@ -945,6 +954,12 @@ macro_rules! impl_mixed_math_ops {
             fn $method(self, rhs: ShaderDSL<'a, Var<$scalar_type>>) -> Self::Output {
                 let lhs_dsl: ShaderDSL<'a, Var<$vec_type<f32>>> = self.into();
                 dsl_mixed_binary_op(FuncName::BiOp($func_name), lhs_dsl, rhs)
+            }
+        }
+        impl<'a, B: 'a> $trait<TypedAccessExpr<Var<B>, $vec_type<f32>>> for ShaderDSL<'a, Var<$scalar_type>>{
+            type Output = ShaderDSL<'a, Var<$vec_type<f32>>>;
+            fn $method(self, rhs: TypedAccessExpr<Var<B>, $vec_type<f32>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
             }
         }
 
@@ -994,3 +1009,157 @@ impl_mixed_math_ops!(Mul, mul, "*", Vec4, f32);
 impl_mixed_math_ops!(Div, div, "/", Vec2, f32);
 impl_mixed_math_ops!(Div, div, "/", Vec3, f32);
 impl_mixed_math_ops!(Div, div, "/", Vec4, f32);
+
+#[derive(Clone, Copy)]
+pub struct Mat<const W: u32, const H: u32, T>(PhantomData<T>);
+// TODO)) we should support other types of Mat, now the T is useless.
+pub fn make_mat2_impl<'a>(c0: ShaderDSL<'a, Var<Vec2<f32>>>, c1: ShaderDSL<'a, Var<Vec2<f32>>>) -> ShaderDSL<'a, Var<Mat<2, 2, f32>>> {
+    let a_val = Arc::new(c0);
+    let b_val = Arc::new(c1);
+    _mdo_move! {
+        [a_val, b_val]
+        ident <- _new_ident();
+        v1 <- (*a_val).clone();
+        v2 <- (*b_val).clone();
+        _call_func_rt(FuncName::NormalFunctionInvoke("mat2x2<f32>"), vec![v1.into(), v2.into()], ident)
+    }
+}
+
+pub fn make_mat3_impl<'a>(c0: ShaderDSL<'a, Var<Vec3<f32>>>, c1: ShaderDSL<'a, Var<Vec3<f32>>>, c2: ShaderDSL<'a, Var<Vec3<f32>>>) -> ShaderDSL<'a, Var<Mat<3, 3, f32>>> {
+    let a_val = Arc::new(c0);
+    let b_val = Arc::new(c1);
+    let c_val = Arc::new(c2);
+    _mdo_move! {
+        [a_val, b_val, c_val]
+        ident <- _new_ident();
+        v1 <- (*a_val).clone();
+        v2 <- (*b_val).clone();
+        v3 <- (*c_val).clone();
+        _call_func_rt(FuncName::NormalFunctionInvoke("mat3x3<f32>"), vec![v1.into(), v2.into(), v3.into()], ident)
+    }
+}
+
+pub fn make_mat4_impl<'a>(c0: ShaderDSL<'a, Var<Vec4<f32>>>, c1: ShaderDSL<'a, Var<Vec4<f32>>>, c2: ShaderDSL<'a, Var<Vec4<f32>>>, c3: ShaderDSL<'a, Var<Vec4<f32>>>) -> ShaderDSL<'a, Var<Mat<4, 4, f32>>> {
+    let a_val = Arc::new(c0);
+    let b_val = Arc::new(c1);
+    let c_val = Arc::new(c2);
+    let d_val = Arc::new(c3);
+    _mdo_move! {
+        [a_val, b_val, c_val, d_val]
+        ident <- _new_ident();
+        v1 <- (*a_val).clone();
+        v2 <- (*b_val).clone();
+        v3 <- (*c_val).clone();
+        v4 <- (*d_val).clone();
+        _call_func_rt(FuncName::NormalFunctionInvoke("mat4x4<f32>"), vec![v1.into(), v2.into(), v3.into(), v4.into()], ident)
+    }
+}
+
+#[macro_export]
+macro_rules! make_mat2 {
+    ($c0:expr, $c1:expr $(,)?) => { make_mat2_impl($c0.in_context(), $c1.in_context()) };
+}
+#[macro_export]
+macro_rules! make_mat3 {
+    ($c0:expr, $c1:expr, $c2:expr $(,)?) => { make_mat3_impl($c0.in_context(), $c1.in_context(), $c2.in_context()) };
+}
+#[macro_export]
+macro_rules! make_mat4 {
+    ($c0:expr, $c1:expr, $c2:expr, $c3:expr $(,)?) => { make_mat4_impl($c0.in_context(), $c1.in_context(), $c2.in_context(), $c3.in_context()) };
+}
+
+macro_rules! impl_mat_mixed_op {
+    ($trait:ident, $method:ident, $func_name:expr, $left:ty, $right:ty, $out:ty) => {
+        
+        impl<'a> $trait<ShaderDSL<'a, Var<$right>>> for ShaderDSL<'a, Var<$left>> {
+            type Output = ShaderDSL<'a, Var<$out>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$right>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
+            }
+        }
+        
+        impl<'a> $trait<Var<$right>> for ShaderDSL<'a, Var<$left>> {
+            type Output = ShaderDSL<'a, Var<$out>>;
+            fn $method(self, rhs: Var<$right>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
+            }
+        }
+        
+        impl<'a> $trait<ShaderDSL<'a, Var<$right>>> for Var<$left> {
+            type Output = ShaderDSL<'a, Var<$out>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$right>>) -> Self::Output {
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), self, rhs)
+            }
+        }
+
+        impl<'a, B: 'a> $trait<ShaderDSL<'a, Var<$right>>> for TypedAccessExpr<Var<B>, $left> {
+            type Output = ShaderDSL<'a, Var<$out>>;
+            fn $method(self, rhs: ShaderDSL<'a, Var<$right>>) -> Self::Output {
+                let lhs_dsl: ShaderDSL<'a, Var<$left>> = self.into();
+                dsl_mixed_binary_op(FuncName::BiOp($func_name), lhs_dsl, rhs)
+            }
+        }
+    };
+}
+
+impl_mat_mixed_op!(Mul, mul, "*", Mat<2, 2, f32>, f32, Mat<2, 2, f32>);
+impl_mat_mixed_op!(Mul, mul, "*", Mat<3, 3, f32>, f32, Mat<3, 3, f32>);
+impl_mat_mixed_op!(Mul, mul, "*", Mat<4, 4, f32>, f32, Mat<4, 4, f32>);
+
+impl_mat_mixed_op!(Mul, mul, "*", f32, Mat<2, 2, f32>, Mat<2, 2, f32>);
+impl_mat_mixed_op!(Mul, mul, "*", f32, Mat<3, 3, f32>, Mat<3, 3, f32>);
+impl_mat_mixed_op!(Mul, mul, "*", f32, Mat<4, 4, f32>, Mat<4, 4, f32>);
+
+impl_mat_mixed_op!(Mul, mul, "*", Mat<2, 2, f32>, Vec2<f32>, Vec2<f32>);
+impl_mat_mixed_op!(Mul, mul, "*", Mat<3, 3, f32>, Vec3<f32>, Vec3<f32>);
+impl_mat_mixed_op!(Mul, mul, "*", Mat<4, 4, f32>, Vec4<f32>, Vec4<f32>);
+
+impl_mat_mixed_op!(Mul, mul, "*", Vec2<f32>, Mat<2, 2, f32>, Vec2<f32>);
+impl_mat_mixed_op!(Mul, mul, "*", Vec3<f32>, Mat<3, 3, f32>, Vec3<f32>);
+impl_mat_mixed_op!(Mul, mul, "*", Vec4<f32>, Mat<4, 4, f32>, Vec4<f32>);
+
+impl_mat_mixed_op!(Add, add, "+", Mat<2, 2, f32>, Mat<2, 2, f32>, Mat<2, 2, f32>);
+impl_mat_mixed_op!(Add, add, "+", Mat<3, 3, f32>, Mat<3, 3, f32>, Mat<3, 3, f32>);
+impl_mat_mixed_op!(Add, add, "+", Mat<4, 4, f32>, Mat<4, 4, f32>, Mat<4, 4, f32>);
+
+impl_mat_mixed_op!(Sub, sub, "-", Mat<2, 2, f32>, Mat<2, 2, f32>, Mat<2, 2, f32>);
+impl_mat_mixed_op!(Sub, sub, "-", Mat<3, 3, f32>, Mat<3, 3, f32>, Mat<3, 3, f32>);
+impl_mat_mixed_op!(Sub, sub, "-", Mat<4, 4, f32>, Mat<4, 4, f32>, Mat<4, 4, f32>);
+
+impl_mat_mixed_op!(Mul, mul, "*", Mat<2, 2, f32>, Mat<2, 2, f32>, Mat<2, 2, f32>);
+impl_mat_mixed_op!(Mul, mul, "*", Mat<3, 3, f32>, Mat<3, 3, f32>, Mat<3, 3, f32>);
+impl_mat_mixed_op!(Mul, mul, "*", Mat<4, 4, f32>, Mat<4, 4, f32>, Mat<4, 4, f32>);
+
+impl<'a, const W: u32, T> Var<Mat<W, 2, T>> {
+    pub fn col(self, idx: impl Into<ShaderDSL<'a, Var<i32>>>) -> ShaderDSL<'a, TypedAccessExpr<Var<Mat<W, 2, T>>, Vec2<T>>> {
+        mdo! {
+            v <- idx.into();
+            Free::Pure(TypedAccessExpr {
+                v: VarAccessExpr::Array1DAccess(Box::new(VarAccessExpr::Var(self)), v),
+                _marker: PhantomData,
+            })
+        }
+    }
+}
+impl<'a, const W: u32, T> Var<Mat<W, 3, T>> {
+    pub fn col(self, idx: impl Into<ShaderDSL<'a, Var<i32>>>) -> ShaderDSL<'a, TypedAccessExpr<Var<Mat<W, 3, T>>, Vec3<T>>> {
+        mdo! {
+            v <- idx.into();
+            Free::Pure(TypedAccessExpr {
+                v: VarAccessExpr::Array1DAccess(Box::new(VarAccessExpr::Var(self)), v),
+                _marker: PhantomData,
+            })
+        }
+    }
+}
+impl<'a, const W: u32, T> Var<Mat<W, 4, T>> {
+    pub fn col(self, idx: impl Into<ShaderDSL<'a, Var<i32>>>) -> ShaderDSL<'a, TypedAccessExpr<Var<Mat<W, 4, T>>, Vec4<T>>> {
+        mdo! {
+            v <- idx.into();
+            Free::Pure(TypedAccessExpr {
+                v: VarAccessExpr::Array1DAccess(Box::new(VarAccessExpr::Var(self)), v),
+                _marker: PhantomData,
+            })
+        }
+    }
+}

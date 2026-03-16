@@ -9,13 +9,13 @@ pub use monad::{Free, OwnedFunctor, OwnedApplicative, OwnedMonad, MonadFree, Clo
 
 pub use shader_dsl::{Var, VarType, ShaderDSL, if_, while_, IntoShaderVar, FuncArg, FuncName, _new_ident, _call_func_rt};
 
-pub use vec_op::{Vec2, Vec3, Vec4, Array1D, Mat4x4, VarAccessExpr, TypedAccessExpr, 
-                 make_float4_impl, make_float3_impl, make_float2_impl};
+pub use vec_op::{Vec2, Vec3, Vec4, Mat, Array1D, VarAccessExpr, TypedAccessExpr, 
+                 make_float4_impl, make_float3_impl, make_float2_impl, make_mat2_impl, make_mat3_impl, make_mat4_impl};
 
 pub use builtin_func::{
     ShaderCmp, ShaderLogic, ShaderLift1, ShaderLift2, ShaderLift3, ShaderLift4,
     ForM, ForDSL, LVal,
-    normalize, length, dot, cross, pow, distance, reflect, mix, clamp, set, abs, sin, cos, tan, sqrt, select, max, min, sign, return_, radians
+    normalize, length, dot, cross, pow, distance, reflect, mix, clamp, set, abs, sin, cos, tan, sqrt, select, max, min, sign, return_, radians, floor, smoothstep, exp, fract, tanh,
 };
 
 pub use cast::{WgslType, ShaderCast};

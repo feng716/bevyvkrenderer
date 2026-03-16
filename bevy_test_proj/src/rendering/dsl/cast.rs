@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use crate::rendering::dsl::monad::OwnedMonad;
 
-use crate::{_mdo_move, mdo, rendering::dsl::{shader_dsl::{_call_func_rt, _new_ident, FuncArg, FuncName, ShaderDSL, Var}, vec_op::{ TypedAccessExpr, Vec2, Vec3, Vec4 }}};
+use crate::{_mdo_move, mdo, rendering::dsl::{shader_dsl::{_call_func_rt, _new_ident, FuncArg, FuncName, ShaderDSL, Var}, vec_op::{ TypedAccessExpr, Vec2, Vec3, Vec4, Mat }}};
 
 pub trait WgslType {
     fn wgsl_name() -> &'static str;
@@ -16,6 +16,7 @@ impl WgslType for Vec4<f32> { fn wgsl_name() -> &'static str { "vec4f" } }
 impl WgslType for Vec2<u32> { fn wgsl_name() -> &'static str { "vec2u" } }
 impl WgslType for Vec3<u32> { fn wgsl_name() -> &'static str { "vec3u" } }
 impl WgslType for Vec4<u32> { fn wgsl_name() -> &'static str { "vec4u" } }
+impl WgslType for Mat<2, 2, f32> { fn wgsl_name() -> &'static str { "mat2x2<f32>" } }
 impl<T: WgslType> WgslType for Var<T> { fn wgsl_name() -> &'static str { T::wgsl_name() } }
 pub trait ShaderCast<'a, T> {
     fn cast<U: WgslType>(self) -> ShaderDSL<'a, Var<U>>;

@@ -5,12 +5,8 @@ trait Identity<T>: Sized {
     fn into_same(self) -> T;
 }
 impl<T: Sized> Identity<T> for T {
-    fn from_same(this: T) -> Self {
-        this
-    }
-    fn into_same(self) -> T {
-        self
-    }
+    fn from_same(this: T) -> Self { this }
+    fn into_same(self) -> T { self }
 }
 
 #[macro_export]

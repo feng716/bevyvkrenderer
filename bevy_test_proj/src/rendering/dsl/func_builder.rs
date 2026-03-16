@@ -8,7 +8,7 @@ use shader_macros::ShaderStruct;
 use crate::{_mdo_move, make_float2, make_float3};
 use crate::rendering::dsl::builtin_func::set;
 use crate::rendering::dsl::shader_dsl::{_call_func, _call_func_rt, _new_ident, IntoShaderVar, VarType};
-use crate::rendering::dsl::vec_op::{Array1D, Mat4x4, TypedAccessExpr, VarAccessExpr, Vec4};
+use crate::rendering::dsl::vec_op::{Array1D, TypedAccessExpr, VarAccessExpr, Vec4};
 use crate::{
     make_float4, mdo,
     rendering::dsl::{
@@ -684,6 +684,8 @@ macro_rules! impl_normal_closure {
 impl_normal_closure!(A);
 impl_normal_closure!(A, B);
 impl_normal_closure!(A, B, C);
+impl_normal_closure!(A, B, C, D);
+impl_normal_closure!(A, B, C, D, E);
 
 pub fn define_fn<'a, Args, Out, Body>(name: &'static str, body: Body) -> ShaderFn<Args, Out>
 where
@@ -747,6 +749,7 @@ impl_typed_call_no_ret!(a: A : EA);
 impl_typed_call_no_ret!(a: A : EA, b: B : EB);
 impl_typed_call_no_ret!(a: A : EA, b: B : EB, c: C : EC);
 impl_typed_call_no_ret!(a: A : EA, b: B : EB, c: C : EC, d: D : ED);
+impl_typed_call_no_ret!(a: A : EA, b: B : EB, c: C : EC, d: D : ED, e: E : EE);
 
 macro_rules! impl_typed_call_ret {
     ( $($arg:ident : $T:ident : $Expr:ident),* ) => {
@@ -784,6 +787,7 @@ impl_typed_call_ret!(a: A : EA);
 impl_typed_call_ret!(a: A : EA, b: B : EB);
 impl_typed_call_ret!(a: A : EA, b: B : EB, c: C : EC);
 impl_typed_call_ret!(a: A : EA, b: B : EB, c: C : EC, d: D : ED);
+impl_typed_call_ret!(a: A : EA, b: B : EB, c: C : EC, d: D : ED, e: E : EE);
 
 #[derive(ShaderStruct)]
 struct Camera {
@@ -807,7 +811,7 @@ fn test_shader_builder() {
                 "cs_main", 
                 (8, 8, 1), 
                 |BuiltIn(global_id, _): BuiltIn<GlobalInvocationId, Vec3<u32>>| mdo! {
-                    res <- tea.call(1., 2.);
+                    _res <- tea.call(1., 2.);
                     _v <- globals.get(PixelBufferVar).at(0);
                     set(_v, make_float3!(1.));
                     _v1 <- make_float3!(1.);
@@ -816,6 +820,7 @@ fn test_shader_builder() {
                     Free::Pure(())
                 }
             ).vert("vs_main", |Location(pos): Location<0, Vec3<f32>>|mdo!{
+                _v1 <- make_float3!(1.);
                 _t <- pos.x().in_context();
                 _cam <- globals.get(CameraVar).in_context();
                 v <- make_float4!(1.);

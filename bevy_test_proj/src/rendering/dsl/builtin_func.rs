@@ -158,6 +158,27 @@ where
 {
     dsl_builtin_1(FuncName::NormalFunctionInvoke("abs"), a)
 }
+pub fn exp<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("exp"), a)
+}
+pub fn fract<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("fract"), a)
+}
+pub fn floor<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("floor"), a)
+}
 pub fn sin<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
 where
     A: Into<ShaderDSL<'a, Var<T>>>,
@@ -186,6 +207,13 @@ where
     Var<T>: Into<FuncArg>,
 {
     dsl_builtin_1(FuncName::NormalFunctionInvoke("tan"), a)
+}
+pub fn tanh<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_1(FuncName::NormalFunctionInvoke("tanh"), a)
 }
 pub fn sqrt<'a, A, T>(a: A) -> ShaderDSL<'a, Var<T>>
 where
@@ -290,6 +318,15 @@ where
     Var<bool>: Into<FuncArg>
 {
     dsl_builtin_3(FuncName::NormalFunctionInvoke("select"), a, b, c)
+}
+pub fn smoothstep<'a, A, B, C, T>(a: A, b: B, c: C) -> ShaderDSL<'a, Var<T>>
+where
+    A: Into<ShaderDSL<'a, Var<T>>>,
+    B: Into<ShaderDSL<'a, Var<T>>>,
+    C: Into<ShaderDSL<'a, Var<T>>>,
+    Var<T>: Into<FuncArg>,
+{
+    dsl_builtin_3(FuncName::NormalFunctionInvoke("smoothstep"), a, b, c)
 }
 
 pub fn clamp<'a, A, B, C, T>(a: A, b: B, c: C) -> ShaderDSL<'a, Var<T>>

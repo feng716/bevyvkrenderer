@@ -263,7 +263,6 @@ fn gen_shader() -> String{
                     
                     if_(cos_wo.lt(1e-4f32), mdo! { break_(); });
 
-                    // --- A. Hit Light Implicitly? ---
                     let hit_light_cond = |p: Var<Vec3<f32>>| mdo! { 
                         p.y().gt(1.97f32)
                         .and(p.x().gt(-0.24f32)).and(p.x().lt(0.23f32))

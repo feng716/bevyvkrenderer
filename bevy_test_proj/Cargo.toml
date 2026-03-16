@@ -13,6 +13,16 @@ path = "src/main.rs"
 name = "wgsl-shader-dsl"
 path = "src/wgpu_shader_dsl.rs"
 
+[[bin]]
+name = "shadertoy-test-1"
+path = "src/shadertoy_test1.rs"
+
+[[bin]]
+name = "shadertoy-test-2"
+path = "src/shadertoy_test2.rs"
+[[bin]]
+name = "shadertoy-test-3"
+path = "src/shadertoy_test3.rs"
 [profile.dev]
 opt-level = 1
 

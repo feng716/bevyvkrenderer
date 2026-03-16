@@ -7,7 +7,7 @@ use crate::rendering::dsl::vec_op::TypedAccessExpr;
 use crate::{make_float4, mdo};
 
 use super::monad::{lift_f, CloneWrapped, Free, OwnedApplicative, OwnedFunctor, OwnedMonad};
-use super::vec_op::{make_float4_impl, Vec2, Vec3, Vec4};
+use super::vec_op::{make_float4_impl, Vec2, Vec3, Vec4, Mat};
 
 #[derive(Copy, Clone)]
 pub enum VarType {
@@ -84,6 +84,9 @@ pub enum FuncArg {
     Bool(Var<bool>),
     I32(Var<i32>),
     U32(Var<u32>),
+    MAT2x2F(Var<Mat<2, 2, f32>>),
+    MAT3x3F(Var<Mat<3, 3, f32>>),
+    MAT4x4F(Var<Mat<4, 4, f32>>),
     StructName(String)
 }
 impl From<Var<f32>> for FuncArg {
@@ -119,6 +122,21 @@ impl From<Var<i32>> for FuncArg {
 impl From<Var<u32>> for FuncArg {
     fn from(v: Var<u32>) -> Self {
         FuncArg::U32(v)
+    }
+}
+impl From<Var<Mat<2, 2, f32>>> for FuncArg {
+    fn from(v: Var<Mat<2, 2, f32>>) -> Self {
+        FuncArg::MAT2x2F(v)
+    }
+}
+impl From<Var<Mat<3, 3, f32>>> for FuncArg {
+    fn from(v: Var<Mat<3, 3, f32>>) -> Self {
+        FuncArg::MAT3x3F(v)
+    }
+}
+impl From<Var<Mat<4, 4, f32>>> for FuncArg {
+    fn from(v: Var<Mat<4, 4, f32>>) -> Self {
+        FuncArg::MAT4x4F(v)
     }
 }
 impl<'a, T> Clone for ShaderDSLF<'a, T>
